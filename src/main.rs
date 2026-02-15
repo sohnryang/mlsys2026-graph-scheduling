@@ -1,6 +1,11 @@
+use std::fs::File;
+use std::io::BufReader;
 use std::path::PathBuf;
 
 use clap::Parser;
+
+pub mod input_format;
+use crate::input_format::InputFormat;
 
 #[derive(Parser)]
 struct Cli {
@@ -10,6 +15,11 @@ struct Cli {
 
 fn main() {
     let cli = Cli::parse();
-    println!("input file path: {:?}", cli.input_file);
-    println!("output file path: {:?}", cli.output_file);
+    let file = File::open(&cli.input_file).expect("failed to open input file");
+    let reader = BufReader::new(file);
+    let input: InputFormat =
+        serde_json::from_reader(reader).expect("failed to parse input file as JSON");
+
+    // Temporary smoke test output.
+    println!("{:?}", input);
 }
