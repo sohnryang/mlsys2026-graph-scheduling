@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+pub mod graph;
 pub mod input_format;
 use crate::input_format::InputFormat;
 

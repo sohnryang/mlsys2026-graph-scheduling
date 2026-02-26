@@ -1,17 +1,13 @@
 use serde::Deserialize;
 
-#[derive(Clone, Debug, Deserialize)]
-pub enum OperationType {
-    MatMul,
-    Pointwise,
-}
+use crate::graph::{OperationType, TensorId};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputFormat {
     pub widths: Vec<i64>,
     pub heights: Vec<i64>,
-    pub inputs: Vec<Vec<usize>>,
-    pub outputs: Vec<Vec<usize>>,
+    pub inputs: Vec<Vec<TensorId>>,
+    pub outputs: Vec<Vec<TensorId>>,
     pub base_costs: Vec<i64>,
     pub op_types: Vec<OperationType>,
     pub fast_memory_capacity: i64,
