@@ -195,3 +195,125 @@ impl ComputationGraph {
         post_order
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ComputationGraph, OperationId, OperationType, TensorId};
+    use crate::input_format::InputFormat;
+
+    fn make_input(
+        inputs: Vec<Vec<TensorId>>,
+        outputs: Vec<Vec<TensorId>>,
+        num_tensors: usize,
+    ) -> InputFormat {
+        let num_ops = inputs.len();
+        InputFormat {
+            widths: vec![1; num_tensors],
+            heights: vec![1; num_tensors],
+            inputs,
+            outputs,
+            base_costs: vec![1; num_ops],
+            op_types: vec![OperationType::Pointwise; num_ops],
+            fast_memory_capacity: 1,
+            slow_memory_bandwidth: 1,
+            native_granularity: (1, 1),
+        }
+    }
+
+    fn assert_is_topological_order(graph: &ComputationGraph, order: &[OperationId]) {
+        let num_ops = order.len();
+        let mut position = vec![usize::MAX; num_ops];
+
+        for (idx, op_id) in order.iter().copied().enumerate() {
+            assert!(op_id.0 < num_ops, "operation id out of range: {}", op_id.0);
+            assert_eq!(
+                position[op_id.0],
+                usize::MAX,
+                "operation appears more than once: {:?}",
+                op_id
+            );
+            position[op_id.0] = idx;
+        }
+
+        for (op_idx, op_outputs) in graph.outputs() {
+            for tensor_id in op_outputs {
+                if let Some(users) = graph.users().get(tensor_id) {
+                    for &user in users {
+                        assert!(
+                            position[op_idx.0] < position[user.0],
+                            "dependency violated: {:?} must come before {:?}",
+                            op_idx,
+                            user
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn topological_sort_empty_graph() {
+        let input = make_input(vec![], vec![], 0);
+        let graph = ComputationGraph::new(&input);
+
+        assert_eq!(graph.topological_sort(), vec![]);
+    }
+
+    #[test]
+    fn topological_sort_linear_chain() {
+        let t0 = TensorId(0);
+        let t1 = TensorId(1);
+        let t2 = TensorId(2);
+
+        let input = make_input(
+            vec![vec![], vec![t0], vec![t1]],
+            vec![vec![t0], vec![t1], vec![t2]],
+            3,
+        );
+        let graph = ComputationGraph::new(&input);
+
+        assert_eq!(
+            graph.topological_sort(),
+            vec![OperationId(0), OperationId(1), OperationId(2)]
+        );
+    }
+
+    #[test]
+    fn topological_sort_branching_dag() {
+        let t0 = TensorId(0);
+        let t1 = TensorId(1);
+        let t2 = TensorId(2);
+        let t3 = TensorId(3);
+        let t4 = TensorId(4);
+
+        let input = make_input(
+            vec![vec![], vec![t0], vec![t1], vec![t2, t3]],
+            vec![vec![t0, t1], vec![t2], vec![t3], vec![t4]],
+            5,
+        );
+        let graph = ComputationGraph::new(&input);
+        let order = graph.topological_sort();
+
+        assert_eq!(order.len(), 4);
+        assert_is_topological_order(&graph, &order);
+    }
+
+    #[test]
+    fn topological_sort_disconnected_components() {
+        let t0 = TensorId(0);
+        let t1 = TensorId(1);
+        let t2 = TensorId(2);
+        let t3 = TensorId(3);
+
+        let input = make_input(
+            vec![vec![], vec![t0], vec![], vec![t2]],
+            vec![vec![t0], vec![t1], vec![t2], vec![t3]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let order = graph.topological_sort();
+
+        assert_eq!(order.len(), 4);
+        assert_is_topological_order(&graph, &order);
+    }
+}
