@@ -10,6 +10,12 @@ pub struct InputFormat {
     pub outputs: Vec<Vec<TensorId>>,
     pub base_costs: Vec<i64>,
     pub op_types: Vec<OperationType>,
+    #[serde(flatten)]
+    pub device_parameters: DeviceParameters,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DeviceParameters {
     pub fast_memory_capacity: i64,
     pub slow_memory_bandwidth: i64,
     pub native_granularity: (i64, i64),
