@@ -221,19 +221,22 @@ mod tests {
     }
 
     fn assert_is_topological_order(graph: &ComputationGraph, order: &[OperationId]) {
-        let num_ops = order.len();
-        let mut position = vec![usize::MAX; num_ops];
+        let num_ops = graph.operations.len();
+        let mut position = vec![None; num_ops];
 
         for (idx, op_id) in order.iter().copied().enumerate() {
             assert!(op_id.0 < num_ops, "operation id out of range: {}", op_id.0);
-            assert_eq!(
-                position[op_id.0],
-                usize::MAX,
+            assert!(
+                position[op_id.0].is_none(),
                 "operation appears more than once: {:?}",
                 op_id
             );
-            position[op_id.0] = idx;
+            position[op_id.0] = Some(idx);
         }
+        assert!(
+            position.iter().all(|p| p.is_some()),
+            "some operations are missing in the topological order"
+        );
 
         for (op_idx, op_outputs) in graph.outputs() {
             for tensor_id in op_outputs {
