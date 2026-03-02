@@ -34,7 +34,7 @@ pub struct ComputationGraph {
     operations: Vec<Operation>,
     tensors: Vec<Tensor>,
     outputs: HashMap<OperationId, Vec<TensorId>>,
-    users: HashMap<TensorId, Vec<OperationId>>,
+    consumers: HashMap<TensorId, Vec<OperationId>>,
 }
 
 impl ComputationGraph {
@@ -103,10 +103,10 @@ impl ComputationGraph {
             .map(|(op_idx, op_outputs)| (OperationId(op_idx), op_outputs))
             .collect();
 
-        let mut tensor_users = HashMap::new();
+        let mut tensor_consumers = HashMap::new();
         for (op_id, input_ids) in input.inputs.iter().enumerate() {
             for &input_id in input_ids {
-                tensor_users
+                tensor_consumers
                     .entry(input_id)
                     .or_insert(vec![])
                     .push(OperationId(op_id));
@@ -117,7 +117,7 @@ impl ComputationGraph {
             operations,
             tensors,
             outputs,
-            users: tensor_users,
+            consumers: tensor_consumers,
         }
     }
 
@@ -138,18 +138,18 @@ impl ComputationGraph {
             .collect()
     }
 
-    pub fn users(&self) -> &HashMap<TensorId, Vec<OperationId>> {
-        &self.users
+    pub fn consumers(&self) -> &HashMap<TensorId, Vec<OperationId>> {
+        &self.consumers
     }
 
-    pub fn user_ids_for(&self, tensor_id: TensorId) -> &[OperationId] {
-        self.users
+    pub fn consumer_ids_for(&self, tensor_id: TensorId) -> &[OperationId] {
+        self.consumers
             .get(&tensor_id)
             .expect(format!("{tensor_id:?} does not exist").as_str())
     }
 
-    pub fn users_for(&self, tensor_id: TensorId) -> Vec<Operation> {
-        self.users[&tensor_id]
+    pub fn consumers_for(&self, tensor_id: TensorId) -> Vec<Operation> {
+        self.consumers[&tensor_id]
             .iter()
             .map(|id| self.operations[id.0].clone())
             .collect()
@@ -180,14 +180,14 @@ impl ComputationGraph {
                         self.outputs[&operation_id]
                             .iter()
                             .flat_map(|tensor_id| {
-                                self.users
+                                self.consumers
                                     .get(tensor_id)
                                     .map(|v| v.iter())
                                     .unwrap_or_default()
                             })
-                            .for_each(|&user_id| {
-                                if state[user_id.0] == State::Unvisited {
-                                    stack.push(user_id);
+                            .for_each(|&consumer_id| {
+                                if state[consumer_id.0] == State::Unvisited {
+                                    stack.push(consumer_id);
                                 }
                             });
                     }
@@ -211,7 +211,7 @@ impl ComputationGraph {
 #[cfg(test)]
 mod tests {
     use super::{ComputationGraph, OperationId, OperationType, TensorId};
-    use crate::input_format::InputFormat;
+    use crate::input_format::{DeviceParameters, InputFormat};
 
     fn make_input(
         inputs: Vec<Vec<TensorId>>,
@@ -226,9 +226,11 @@ mod tests {
             outputs,
             base_costs: vec![1; num_ops],
             op_types: vec![OperationType::Pointwise; num_ops],
-            fast_memory_capacity: 1,
-            slow_memory_bandwidth: 1,
-            native_granularity: (1, 1),
+            device_parameters: DeviceParameters {
+                fast_memory_capacity: 1,
+                slow_memory_bandwidth: 1,
+                native_granularity: (1, 1),
+            },
         }
     }
 
@@ -251,16 +253,14 @@ mod tests {
         );
 
         for (op_idx, op_outputs) in graph.outputs() {
-            for tensor_id in op_outputs {
-                if let Some(users) = graph.users().get(tensor_id) {
-                    for &user in users {
-                        assert!(
-                            position[op_idx.0] < position[user.0],
-                            "dependency violated: {:?} must come before {:?}",
-                            op_idx,
-                            user
-                        );
-                    }
+            for &tensor_id in op_outputs {
+                for &consumer in graph.consumer_ids_for(tensor_id) {
+                    assert!(
+                        position[op_idx.0] < position[consumer.0],
+                        "dependency violated: {:?} must come before {:?}",
+                        op_idx,
+                        consumer
+                    );
                 }
             }
         }
