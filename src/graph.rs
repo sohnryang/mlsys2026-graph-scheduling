@@ -125,6 +125,12 @@ impl ComputationGraph {
         &self.outputs
     }
 
+    pub fn output_ids_for(&self, operation_id: OperationId) -> &[TensorId] {
+        self.outputs
+            .get(&operation_id)
+            .expect(format!("{operation_id:?} does not exist").as_str())
+    }
+
     pub fn outputs_for(&self, operation_id: OperationId) -> Vec<Tensor> {
         self.outputs[&operation_id]
             .iter()
@@ -134,6 +140,12 @@ impl ComputationGraph {
 
     pub fn users(&self) -> &HashMap<TensorId, Vec<OperationId>> {
         &self.users
+    }
+
+    pub fn user_ids_for(&self, tensor_id: TensorId) -> &[OperationId] {
+        self.users
+            .get(&tensor_id)
+            .expect(format!("{tensor_id:?} does not exist").as_str())
     }
 
     pub fn users_for(&self, tensor_id: TensorId) -> Vec<Operation> {
