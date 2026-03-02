@@ -33,7 +33,9 @@ pub struct Operation {
 pub struct ComputationGraph {
     operations: Vec<Operation>,
     tensors: Vec<Tensor>,
+    inputs: HashMap<OperationId, Vec<TensorId>>,
     outputs: HashMap<OperationId, Vec<TensorId>>,
+    producer: HashMap<TensorId, OperationId>,
     consumers: HashMap<TensorId, Vec<OperationId>>,
 }
 
@@ -95,6 +97,14 @@ impl ComputationGraph {
             }
         }
 
+        let inputs = input
+            .inputs
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(op_idx, op_inputs)| (OperationId(op_idx), op_inputs))
+            .collect();
+
         let outputs = input
             .outputs
             .iter()
@@ -103,10 +113,22 @@ impl ComputationGraph {
             .map(|(op_idx, op_outputs)| (OperationId(op_idx), op_outputs))
             .collect();
 
-        let mut tensor_consumers = HashMap::new();
+        let mut producer = HashMap::new();
+        for (op_idx, op_outputs) in input.outputs.iter().enumerate() {
+            for &tensor_id in op_outputs {
+                let prev = producer.insert(tensor_id, OperationId(op_idx));
+                assert!(
+                    prev.is_none(),
+                    "tensor {:?} has multiple producers",
+                    tensor_id
+                );
+            }
+        }
+
+        let mut consumers = HashMap::new();
         for (op_id, input_ids) in input.inputs.iter().enumerate() {
             for &input_id in input_ids {
-                tensor_consumers
+                consumers
                     .entry(input_id)
                     .or_insert(vec![])
                     .push(OperationId(op_id));
@@ -116,9 +138,28 @@ impl ComputationGraph {
         Self {
             operations,
             tensors,
+            inputs,
             outputs,
-            consumers: tensor_consumers,
+            producer,
+            consumers,
         }
+    }
+
+    pub fn inputs(&self) -> &HashMap<OperationId, Vec<TensorId>> {
+        &self.inputs
+    }
+
+    pub fn input_ids_for(&self, operation_id: OperationId) -> &[TensorId] {
+        self.inputs
+            .get(&operation_id)
+            .expect(format!("{operation_id:?} does not exist").as_str())
+    }
+
+    pub fn inputs_for(&self, operation_id: OperationId) -> Vec<Tensor> {
+        self.inputs[&operation_id]
+            .iter()
+            .map(|id| self.tensors[id.0].clone())
+            .collect()
     }
 
     pub fn outputs(&self) -> &HashMap<OperationId, Vec<TensorId>> {
@@ -136,6 +177,19 @@ impl ComputationGraph {
             .iter()
             .map(|id| self.tensors[id.0].clone())
             .collect()
+    }
+
+    pub fn producer(&self) -> &HashMap<TensorId, OperationId> {
+        &self.producer
+    }
+
+    pub fn producer_id_of(&self, tensor_id: TensorId) -> Option<OperationId> {
+        self.producer.get(&tensor_id).copied()
+    }
+
+    pub fn producer_of(&self, tensor_id: TensorId) -> Option<Operation> {
+        self.producer_id_of(tensor_id)
+            .map(|operation_id| self.operations[operation_id.0].clone())
     }
 
     pub fn consumers(&self) -> &HashMap<TensorId, Vec<OperationId>> {
@@ -254,18 +308,23 @@ mod tests {
 
         for (op_idx, op_outputs) in graph.outputs() {
             for &tensor_id in op_outputs {
-                for &consumer in graph.consumer_ids_for(tensor_id) {
-                    assert!(
-                        position[op_idx.0] < position[consumer.0],
-                        "dependency violated: {:?} must come before {:?}",
-                        op_idx,
-                        consumer
-                    );
+                if let Some(consumer_ids) = graph.consumers().get(&tensor_id) {
+                    for &consumer in consumer_ids {
+                        assert!(
+                            position[op_idx.0] < position[consumer.0],
+                            "dependency violated: {:?} must come before {:?}",
+                            op_idx,
+                            consumer
+                        );
+                    }
                 }
             }
         }
     }
 
+    // (no nodes, no edges)
+    //
+    // result: []
     #[test]
     fn topological_sort_empty_graph() {
         let input = make_input(vec![], vec![], 0);
@@ -274,16 +333,20 @@ mod tests {
         assert_eq!(graph.topological_sort(), vec![]);
     }
 
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // result: [op0, op1, op2]
     #[test]
     fn topological_sort_linear_chain() {
         let t0 = TensorId(0);
         let t1 = TensorId(1);
         let t2 = TensorId(2);
+        let t3 = TensorId(3);
 
         let input = make_input(
-            vec![vec![], vec![t0], vec![t1]],
             vec![vec![t0], vec![t1], vec![t2]],
-            3,
+            vec![vec![t1], vec![t2], vec![t3]],
+            4,
         );
         let graph = ComputationGraph::new(&input);
 
@@ -293,6 +356,11 @@ mod tests {
         );
     }
 
+    //              /--t1--> [op1] --t3--\
+    // t0 --> [op0]                       +--> [op3] --t5-->
+    //              \--t2--> [op2] --t4--/
+    //
+    // result: any valid topological order
     #[test]
     fn topological_sort_branching_dag() {
         let t0 = TensorId(0);
@@ -300,11 +368,12 @@ mod tests {
         let t2 = TensorId(2);
         let t3 = TensorId(3);
         let t4 = TensorId(4);
+        let t5 = TensorId(5);
 
         let input = make_input(
-            vec![vec![], vec![t0], vec![t1], vec![t2, t3]],
-            vec![vec![t0, t1], vec![t2], vec![t3], vec![t4]],
-            5,
+            vec![vec![t0], vec![t1], vec![t2], vec![t3, t4]],
+            vec![vec![t1, t2], vec![t3], vec![t4], vec![t5]],
+            6,
         );
         let graph = ComputationGraph::new(&input);
         let order = graph.topological_sort();
@@ -313,17 +382,24 @@ mod tests {
         assert_is_topological_order(&graph, &order);
     }
 
+    // t0 --> [op0] --t2--> [op1] --t3-->
+    //
+    // t1 --> [op2] --t4--> [op3] --t5-->
+    //
+    // result: any valid topological order (two disconnected chains)
     #[test]
     fn topological_sort_disconnected_components() {
         let t0 = TensorId(0);
         let t1 = TensorId(1);
         let t2 = TensorId(2);
         let t3 = TensorId(3);
+        let t4 = TensorId(4);
+        let t5 = TensorId(5);
 
         let input = make_input(
-            vec![vec![], vec![t0], vec![], vec![t2]],
-            vec![vec![t0], vec![t1], vec![t2], vec![t3]],
-            4,
+            vec![vec![t0], vec![t2], vec![t1], vec![t4]],
+            vec![vec![t2], vec![t3], vec![t4], vec![t5]],
+            6,
         );
         let graph = ComputationGraph::new(&input);
         let order = graph.topological_sort();
