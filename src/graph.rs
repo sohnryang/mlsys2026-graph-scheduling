@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::collections::HashMap;
 
 use serde::Deserialize;
@@ -24,6 +25,51 @@ pub struct Tensor {
 pub struct OperationId(pub usize);
 
 #[derive(Clone, Debug)]
+pub struct TopologicalOrder {
+    order: Vec<OperationId>,
+    /// `position[op.0]` is the index of `op` in `order`.
+    position: Vec<usize>,
+}
+
+impl TopologicalOrder {
+    /// Collects `iter` into a `Vec<OperationId>` sorted by topological position.
+    pub fn sort(&self, ops: &[OperationId]) -> Vec<OperationId> {
+        let mut ops = ops.to_vec();
+        ops.sort_by_key(|op| self.position[op.0]);
+        ops
+    }
+}
+
+impl std::ops::Deref for TopologicalOrder {
+    type Target = [OperationId];
+    fn deref(&self) -> &[OperationId] {
+        &self.order
+    }
+}
+
+impl IntoIterator for TopologicalOrder {
+    type Item = OperationId;
+    type IntoIter = std::vec::IntoIter<OperationId>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.order.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a TopologicalOrder {
+    type Item = OperationId;
+    type IntoIter = std::iter::Copied<std::slice::Iter<'a, OperationId>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.order.iter().copied()
+    }
+}
+
+impl PartialEq<Vec<OperationId>> for TopologicalOrder {
+    fn eq(&self, other: &Vec<OperationId>) -> bool {
+        self.order == *other
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Operation {
     pub kind: OperationType,
     pub base_cost: i64,
@@ -37,6 +83,7 @@ pub struct ComputationGraph {
     outputs: HashMap<OperationId, Vec<TensorId>>,
     producer: HashMap<TensorId, OperationId>,
     consumers: HashMap<TensorId, Vec<OperationId>>,
+    topological_order: OnceCell<TopologicalOrder>,
 }
 
 impl ComputationGraph {
@@ -142,6 +189,7 @@ impl ComputationGraph {
             outputs,
             producer,
             consumers,
+            topological_order: OnceCell::new(),
         }
     }
 
@@ -209,56 +257,65 @@ impl ComputationGraph {
             .collect()
     }
 
-    pub fn topological_sort(&self) -> Vec<OperationId> {
-        let num_ops = self.operations.len();
+    pub fn topological_sort(&self) -> &TopologicalOrder {
+        self.topological_order.get_or_init(|| {
+            let num_ops = self.operations.len();
 
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        enum State {
-            Unvisited,
-            Visiting,
-            Visited,
-        }
-        let mut state = vec![State::Unvisited; num_ops];
-        let mut post_order = Vec::with_capacity(num_ops);
+            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+            enum State {
+                Unvisited,
+                Visiting,
+                Visited,
+            }
+            let mut state = vec![State::Unvisited; num_ops];
+            let mut post_order = Vec::with_capacity(num_ops);
 
-        for start_idx in 0..num_ops {
-            if state[start_idx] != State::Unvisited {
-                continue;
+            for start_idx in 0..num_ops {
+                if state[start_idx] != State::Unvisited {
+                    continue;
+                }
+
+                let mut stack = vec![OperationId(start_idx)];
+                while let Some(&operation_id) = stack.last() {
+                    match state[operation_id.0] {
+                        State::Unvisited => {
+                            state[operation_id.0] = State::Visiting;
+                            self.outputs[&operation_id]
+                                .iter()
+                                .flat_map(|tensor_id| {
+                                    self.consumers
+                                        .get(tensor_id)
+                                        .map(|v| v.iter())
+                                        .unwrap_or_default()
+                                })
+                                .for_each(|&consumer_id| {
+                                    if state[consumer_id.0] == State::Unvisited {
+                                        stack.push(consumer_id);
+                                    }
+                                });
+                        }
+                        State::Visiting => {
+                            state[operation_id.0] = State::Visited;
+                            post_order.push(operation_id);
+                            stack.pop();
+                        }
+                        State::Visited => {
+                            stack.pop();
+                        }
+                    };
+                }
             }
 
-            let mut stack = vec![OperationId(start_idx)];
-            while let Some(&operation_id) = stack.last() {
-                match state[operation_id.0] {
-                    State::Unvisited => {
-                        state[operation_id.0] = State::Visiting;
-                        self.outputs[&operation_id]
-                            .iter()
-                            .flat_map(|tensor_id| {
-                                self.consumers
-                                    .get(tensor_id)
-                                    .map(|v| v.iter())
-                                    .unwrap_or_default()
-                            })
-                            .for_each(|&consumer_id| {
-                                if state[consumer_id.0] == State::Unvisited {
-                                    stack.push(consumer_id);
-                                }
-                            });
-                    }
-                    State::Visiting => {
-                        state[operation_id.0] = State::Visited;
-                        post_order.push(operation_id);
-                        stack.pop();
-                    }
-                    State::Visited => {
-                        stack.pop();
-                    }
-                };
+            post_order.reverse();
+            let mut position = vec![0usize; num_ops];
+            for (idx, &op_id) in post_order.iter().enumerate() {
+                position[op_id.0] = idx;
             }
-        }
-
-        post_order.reverse();
-        post_order
+            TopologicalOrder {
+                order: post_order,
+                position,
+            }
+        })
     }
 }
 
@@ -330,7 +387,7 @@ mod tests {
         let input = make_input(vec![], vec![], 0);
         let graph = ComputationGraph::new(&input);
 
-        assert_eq!(graph.topological_sort(), vec![]);
+        assert_eq!(*graph.topological_sort(), vec![]);
     }
 
     // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
@@ -351,7 +408,7 @@ mod tests {
         let graph = ComputationGraph::new(&input);
 
         assert_eq!(
-            graph.topological_sort(),
+            *graph.topological_sort(),
             vec![OperationId(0), OperationId(1), OperationId(2)]
         );
     }
@@ -406,5 +463,97 @@ mod tests {
 
         assert_eq!(order.len(), 4);
         assert_is_topological_order(&graph, &order);
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // sort([]) = []
+    #[test]
+    fn sort_empty_input() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let order = graph.topological_sort();
+
+        assert_eq!(order.sort(&[]), vec![]);
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // sort([op2, op1, op0]) = [op0, op1, op2]
+    #[test]
+    fn sort_reverses_to_topological_order() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let order = graph.topological_sort();
+
+        assert_eq!(
+            order.sort(&[OperationId(2), OperationId(1), OperationId(0)]),
+            vec![OperationId(0), OperationId(1), OperationId(2)]
+        );
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // sort([op2, op0]) = [op0, op2]  (subset, reverse order)
+    #[test]
+    fn sort_subset_in_reverse_order() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let order = graph.topological_sort();
+
+        assert_eq!(
+            order.sort(&[OperationId(2), OperationId(0)]),
+            vec![OperationId(0), OperationId(2)]
+        );
+    }
+
+    //              /--t1--> [op1] --t3--\
+    // t0 --> [op0]                       +--> [op3] --t5-->
+    //              \--t2--> [op2] --t4--/
+    //
+    // sort([op3, op1]) = [op1, op3]  (sink and mid-node, reversed)
+    #[test]
+    fn sort_subset_of_branching_dag() {
+        let input = make_input(
+            vec![
+                vec![TensorId(0)],
+                vec![TensorId(1)],
+                vec![TensorId(2)],
+                vec![TensorId(3), TensorId(4)],
+            ],
+            vec![
+                vec![TensorId(1), TensorId(2)],
+                vec![TensorId(3)],
+                vec![TensorId(4)],
+                vec![TensorId(5)],
+            ],
+            6,
+        );
+        let graph = ComputationGraph::new(&input);
+        let order = graph.topological_sort();
+
+        let sorted = order.sort(&[OperationId(3), OperationId(1)]);
+        assert_eq!(sorted.len(), 2);
+        assert!(
+            order.sort(&[OperationId(3), OperationId(1)])
+                == order.sort(&[OperationId(1), OperationId(3)]),
+            "sort must be stable with respect to topological position"
+        );
+        // op1 must precede op3 in any valid topological order
+        let pos_op1 = sorted.iter().position(|&x| x == OperationId(1)).unwrap();
+        let pos_op3 = sorted.iter().position(|&x| x == OperationId(3)).unwrap();
+        assert!(pos_op1 < pos_op3);
     }
 }
