@@ -33,8 +33,8 @@ pub struct TopologicalOrder {
 
 impl TopologicalOrder {
     /// Collects `iter` into a `Vec<OperationId>` sorted by topological position.
-    pub fn sort(&self, ops: &[OperationId]) -> Vec<OperationId> {
-        let mut ops = ops.to_vec();
+    pub fn sort(&self, iter: impl IntoIterator<Item = OperationId>) -> Vec<OperationId> {
+        let mut ops: Vec<OperationId> = iter.into_iter().collect();
         ops.sort_by_key(|op| self.position[op.0]);
         ops
     }
@@ -478,7 +478,7 @@ mod tests {
         let graph = ComputationGraph::new(&input);
         let order = graph.topological_sort();
 
-        assert_eq!(order.sort(&[]), vec![]);
+        assert_eq!(order.sort([]), vec![]);
     }
 
     // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
@@ -495,7 +495,7 @@ mod tests {
         let order = graph.topological_sort();
 
         assert_eq!(
-            order.sort(&[OperationId(2), OperationId(1), OperationId(0)]),
+            order.sort([OperationId(2), OperationId(1), OperationId(0)]),
             vec![OperationId(0), OperationId(1), OperationId(2)]
         );
     }
@@ -514,7 +514,7 @@ mod tests {
         let order = graph.topological_sort();
 
         assert_eq!(
-            order.sort(&[OperationId(2), OperationId(0)]),
+            order.sort([OperationId(2), OperationId(0)]),
             vec![OperationId(0), OperationId(2)]
         );
     }
@@ -544,11 +544,11 @@ mod tests {
         let graph = ComputationGraph::new(&input);
         let order = graph.topological_sort();
 
-        let sorted = order.sort(&[OperationId(3), OperationId(1)]);
+        let sorted = order.sort([OperationId(3), OperationId(1)]);
         assert_eq!(sorted.len(), 2);
         assert!(
-            order.sort(&[OperationId(3), OperationId(1)])
-                == order.sort(&[OperationId(1), OperationId(3)]),
+            order.sort([OperationId(3), OperationId(1)])
+                == order.sort([OperationId(1), OperationId(3)]),
             "sort must be stable with respect to topological position"
         );
         // op1 must precede op3 in any valid topological order
