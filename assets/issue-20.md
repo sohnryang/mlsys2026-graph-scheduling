@@ -4,7 +4,7 @@ repo: owner/repo
 issue_number: 20
 issue_title: "Multiple Outputs, Granularity and Iteration Order"
 issue_url: https://github.com/yarongmu-google/MLSys/issues/20
-exported_at: 2026-02-20T05:36:45Z
+exported_at: 2026-03-17T10:55:45Z
 ---
 
 # Issue #20: Multiple Outputs, Granularity and Iteration Order
@@ -72,6 +72,50 @@ We can't reopen issues.
 
 <comment>
 Hi, additionally, if a tensor is an output of a subgraph, but is also used ephemerally inside the subgraph, how does this affect the execution granularity of the subgraph? Can this output cause conflicts with other outputs due to granularity?
+
+</comment>
+
+---
+
+## Comment 5
+- author: yarongmu-google
+- created_at: 2026-03-07T01:39:30Z
+- url: https://github.com/yarongmu-google/MLSys/issues/20#issuecomment-4015174532
+
+<comment>
+Thanks for the follow up questions. 
+
+To answer your first question directly: outputs from the same subgraph do not strictly need to be the same size, provided they share the same iteration space under the chosen granularity.
+
+Regarding your second question (ephemeral data): If a tensor is used ephemerally inside the subgraph, it behaves exactly like the outputs.
+
+
+
+
+</comment>
+
+---
+
+## Comment 6
+- author: sohnryang
+- created_at: 2026-03-07T04:13:56Z
+- url: https://github.com/yarongmu-google/MLSys/issues/20#issuecomment-4015493655
+
+<comment>
+Can you clarify whether the outputs of @xavierrouth's example in this comment "share the same iteration space"?
+
+> 2. all subgraph outputs must be covered by the same number of iterations. For example if you had granularity 128x16x1, and you had two tensor outputs of 128x128 and 64x128, the unified iterations would be 8, but the tensor outputs would be different sizes. Is this valid?
+</comment>
+
+---
+
+## Comment 7
+- author: yarongmu-google
+- created_at: 2026-03-12T01:51:06Z
+- url: https://github.com/yarongmu-google/MLSys/issues/20#issuecomment-4043350130
+
+<comment>
+To clarify my earlier response: the granularity creates a single unified execution grid for the entire subgraph. All outputs within that subgraph must conform to this grid. If two outputs have incompatible sizes for a given granularity, they simply can't be in the same subgraph - but that's not a dead end. As noted in the Objective section, your schedule must cover every operation "at least once," so you can place the same op in multiple subgraphs with different granularities (recompute).
 
 </comment>
 
