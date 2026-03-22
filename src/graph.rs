@@ -1,5 +1,5 @@
 use std::cell::OnceCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 
@@ -193,6 +193,10 @@ impl ComputationGraph {
         }
     }
 
+    pub fn tensors(&self) -> &[Tensor] {
+        &self.tensors
+    }
+
     pub fn inputs(&self) -> &HashMap<OperationId, Vec<TensorId>> {
         &self.inputs
     }
@@ -316,6 +320,79 @@ impl ComputationGraph {
                 position,
             }
         })
+    }
+}
+
+#[derive(Debug)]
+pub struct Subgraph<'a> {
+    parent: &'a ComputationGraph,
+    nodes: Vec<OperationId>,
+}
+
+impl<'a> Subgraph<'a> {
+    pub fn from_nodes(
+        parent: &'a ComputationGraph,
+        iter: impl IntoIterator<Item = OperationId>,
+    ) -> Self {
+        let nodes = parent.topological_sort().sort(iter);
+        Self { parent, nodes }
+    }
+
+    pub fn parent(&self) -> &ComputationGraph {
+        self.parent
+    }
+
+    pub fn nodes(&self) -> &[OperationId] {
+        &self.nodes
+    }
+
+    /// Returns the set of tensors consumed by nodes in this subgraph that are
+    /// not produced by any node in this subgraph.
+    pub fn input_tensor_ids(&self) -> HashSet<TensorId> {
+        let node_set: HashSet<OperationId> = self.nodes.iter().copied().collect();
+        self.nodes
+            .iter()
+            .flat_map(|&op| self.parent.input_ids_for(op))
+            .copied()
+            .filter(|&tensor_id| {
+                self.parent
+                    .producer_id_of(tensor_id)
+                    .map_or(true, |producer| !node_set.contains(&producer))
+            })
+            .collect()
+    }
+
+    /// Returns the set of tensors produced by nodes in this subgraph that are
+    /// consumed by nodes outside this subgraph, or have no consumers.
+    pub fn output_tensor_ids(&self) -> HashSet<TensorId> {
+        let node_set: HashSet<OperationId> = self.nodes.iter().copied().collect();
+        self.nodes
+            .iter()
+            .flat_map(|&op| self.parent.output_ids_for(op))
+            .copied()
+            .filter(|&tensor_id| {
+                self.parent
+                    .consumers()
+                    .get(&tensor_id)
+                    .map_or(true, |consumers| {
+                        consumers.iter().any(|c| !node_set.contains(c))
+                    })
+            })
+            .collect()
+    }
+}
+
+impl PartialEq for Subgraph<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.nodes == other.nodes
+    }
+}
+
+impl Eq for Subgraph<'_> {}
+
+impl std::hash::Hash for Subgraph<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.nodes.hash(state);
     }
 }
 
