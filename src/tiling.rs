@@ -339,11 +339,24 @@ pub fn search_tile_values(
                 Axis::TiledN => n..=n,
                 _ => 1..=max_k_value,
             };
-            for k in range_k {
-                let footprint = input_footprint(m, n, k) + m * n * subgraph_output_ids.len() as i64;
-                if footprint > device_params.fast_memory_capacity {
-                    continue;
+            let k_start = *range_k.start();
+            let k_end = *range_k.end();
+            let output_footprint = m * n * subgraph_output_ids.len() as i64;
+            // Footprint is monotonically non-decreasing in k, so binary-search
+            // for the largest k that fits in fast memory.
+            let capacity = device_params.fast_memory_capacity;
+            let mut lo = k_start;
+            let mut hi = k_end + 1;
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if input_footprint(m, n, mid) + output_footprint <= capacity {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
                 }
+            }
+            // lo == hi == first k that doesn't fit, so iterate k_start..lo.
+            for k in k_start..lo {
                 let traffic = input_traffic(m, n, k);
                 if min_traffic >= traffic {
                     min_traffic = traffic;
