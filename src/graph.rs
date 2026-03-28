@@ -323,7 +323,7 @@ impl ComputationGraph {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Subgraph<'a> {
     parent: &'a ComputationGraph,
     nodes: Vec<OperationId>,
@@ -346,6 +346,64 @@ impl<'a> Subgraph<'a> {
         &self.nodes
     }
 
+    pub fn contains(&self, operation_id: OperationId) -> bool {
+        let topo = self.parent.topological_sort();
+        self.nodes
+            .binary_search_by_key(&topo.position[operation_id.0], |n| topo.position[n.0])
+            .is_ok()
+    }
+
+    pub fn is_subset(&self, other: &Subgraph) -> bool {
+        let topo = self.parent.topological_sort();
+        let mut j = 0;
+        for &node in &self.nodes {
+            let pos = topo.position[node.0];
+            while j < other.nodes.len() && topo.position[other.nodes[j].0] < pos {
+                j += 1;
+            }
+            if j >= other.nodes.len() || other.nodes[j] != node {
+                return false;
+            }
+            j += 1;
+        }
+        true
+    }
+
+    pub fn subtract(&self, other: &Subgraph) -> Subgraph<'a> {
+        let topo = self.parent.topological_sort();
+        let mut j = 0;
+        let mut nodes = Vec::new();
+        for &node in &self.nodes {
+            let pos = topo.position[node.0];
+            while j < other.nodes.len() && topo.position[other.nodes[j].0] < pos {
+                j += 1;
+            }
+            if j < other.nodes.len() && other.nodes[j] == node {
+                j += 1;
+            } else {
+                nodes.push(node);
+            }
+        }
+        Subgraph {
+            parent: self.parent,
+            nodes,
+        }
+    }
+
+    pub fn insert(&mut self, operation_id: OperationId) {
+        let topo = self.parent.topological_sort();
+        let pos = topo.position[operation_id.0];
+        let idx = self
+            .nodes
+            .binary_search_by_key(&pos, |n| topo.position[n.0])
+            .unwrap_or_else(|i| i);
+        self.nodes.insert(idx, operation_id);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
     /// Returns the set of tensors consumed by nodes in this subgraph that are
     /// not produced by any node in this subgraph.
     pub fn input_tensor_ids(&self) -> HashSet<TensorId> {
@@ -360,6 +418,46 @@ impl<'a> Subgraph<'a> {
                     .map_or(true, |producer| !node_set.contains(&producer))
             })
             .collect()
+    }
+
+    /// Returns the number of connected components in this subgraph.
+    pub fn components(&self) -> usize {
+        let node_set: HashSet<OperationId> = self.nodes.iter().copied().collect();
+        let mut visited: HashSet<OperationId> = HashSet::new();
+        let mut count = 0;
+
+        for &start in &self.nodes {
+            if visited.contains(&start) {
+                continue;
+            }
+            count += 1;
+            let mut stack = vec![start];
+            while let Some(op) = stack.pop() {
+                if !visited.insert(op) {
+                    continue;
+                }
+                // Follow output tensors to consumers within the subgraph.
+                for &tensor_id in self.parent.output_ids_for(op) {
+                    if let Some(consumers) = self.parent.consumers().get(&tensor_id) {
+                        for &c in consumers {
+                            if node_set.contains(&c) && !visited.contains(&c) {
+                                stack.push(c);
+                            }
+                        }
+                    }
+                }
+                // Follow input tensors back to producers within the subgraph.
+                for &tensor_id in self.parent.input_ids_for(op) {
+                    if let Some(producer) = self.parent.producer_id_of(tensor_id) {
+                        if node_set.contains(&producer) && !visited.contains(&producer) {
+                            stack.push(producer);
+                        }
+                    }
+                }
+            }
+        }
+
+        count
     }
 
     /// Returns the set of tensors produced by nodes in this subgraph that are
@@ -398,7 +496,7 @@ impl std::hash::Hash for Subgraph<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ComputationGraph, OperationId, OperationType, TensorId};
+    use super::{ComputationGraph, OperationId, OperationType, Subgraph, TensorId};
     use crate::input_format::{DeviceParameters, InputFormat};
 
     fn make_input(
@@ -632,5 +730,443 @@ mod tests {
         let pos_op1 = sorted.iter().position(|&x| x == OperationId(1)).unwrap();
         let pos_op3 = sorted.iter().position(|&x| x == OperationId(3)).unwrap();
         assert!(pos_op1 < pos_op3);
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // {op0, op1} ⊆ {op0, op1, op2}
+    #[test]
+    fn is_subset_proper_subset() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let sub = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let sup = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+
+        assert!(sub.is_subset(&sup));
+        assert!(!sup.is_subset(&sub));
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // {op0, op1, op2} ⊆ {op0, op1, op2}
+    #[test]
+    fn is_subset_equal_sets() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let a = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+        let b = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+
+        assert!(a.is_subset(&b));
+        assert!(b.is_subset(&a));
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // {} ⊆ {op0, op1}
+    #[test]
+    fn is_subset_empty_is_subset_of_any() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let empty = Subgraph::from_nodes(&graph, []);
+        let non_empty = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+
+        assert!(empty.is_subset(&non_empty));
+        assert!(empty.is_subset(&empty));
+    }
+
+    //              /--t1--> [op1] --t3--\
+    // t0 --> [op0]                       +--> [op3] --t5-->
+    //              \--t2--> [op2] --t4--/
+    //
+    // {op1, op3} ⊄ {op0, op2} (disjoint subsets from branches)
+    #[test]
+    fn is_subset_disjoint_subgraphs() {
+        let input = make_input(
+            vec![
+                vec![TensorId(0)],
+                vec![TensorId(1)],
+                vec![TensorId(2)],
+                vec![TensorId(3), TensorId(4)],
+            ],
+            vec![
+                vec![TensorId(1), TensorId(2)],
+                vec![TensorId(3)],
+                vec![TensorId(4)],
+                vec![TensorId(5)],
+            ],
+            6,
+        );
+        let graph = ComputationGraph::new(&input);
+        let a = Subgraph::from_nodes(&graph, [OperationId(1), OperationId(3)]);
+        let b = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(2)]);
+
+        assert!(!a.is_subset(&b));
+        assert!(!b.is_subset(&a));
+    }
+
+    //              /--t1--> [op1] --t3--\
+    // t0 --> [op0]                       +--> [op3] --t5-->
+    //              \--t2--> [op2] --t4--/
+    //
+    // {op0, op2} ⊆ {op0, op1, op2, op3}
+    // {op1} ⊆ {op0, op1, op2, op3}
+    #[test]
+    fn is_subset_partial_overlap_in_dag() {
+        let input = make_input(
+            vec![
+                vec![TensorId(0)],
+                vec![TensorId(1)],
+                vec![TensorId(2)],
+                vec![TensorId(3), TensorId(4)],
+            ],
+            vec![
+                vec![TensorId(1), TensorId(2)],
+                vec![TensorId(3)],
+                vec![TensorId(4)],
+                vec![TensorId(5)],
+            ],
+            6,
+        );
+        let graph = ComputationGraph::new(&input);
+        let full = Subgraph::from_nodes(
+            &graph,
+            [
+                OperationId(0),
+                OperationId(1),
+                OperationId(2),
+                OperationId(3),
+            ],
+        );
+        let branch = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(2)]);
+        let single = Subgraph::from_nodes(&graph, [OperationId(1)]);
+
+        assert!(branch.is_subset(&full));
+        assert!(single.is_subset(&full));
+        assert!(!full.is_subset(&branch));
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // {op0, op1, op2} - {op1} = {op0, op2}
+    #[test]
+    fn subtract_single_element() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let all = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+        let mid = Subgraph::from_nodes(&graph, [OperationId(1)]);
+
+        let result = all.subtract(&mid);
+        assert_eq!(result.nodes(), &[OperationId(0), OperationId(2)]);
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // {op0, op1, op2} - {op0, op1, op2} = {}
+    #[test]
+    fn subtract_equal_sets_gives_empty() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let a = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+        let b = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+
+        assert!(a.subtract(&b).nodes().is_empty());
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // {op0, op2} - {} = {op0, op2}
+    #[test]
+    fn subtract_empty_is_identity() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let a = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(2)]);
+        let empty = Subgraph::from_nodes(&graph, []);
+
+        assert_eq!(
+            a.subtract(&empty).nodes(),
+            &[OperationId(0), OperationId(2)]
+        );
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // {} - {op0, op1} = {}
+    #[test]
+    fn subtract_from_empty_gives_empty() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let empty = Subgraph::from_nodes(&graph, []);
+        let b = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+
+        assert!(empty.subtract(&b).nodes().is_empty());
+    }
+
+    //              /--t1--> [op1] --t3--\
+    // t0 --> [op0]                       +--> [op3] --t5-->
+    //              \--t2--> [op2] --t4--/
+    //
+    // {op0, op1, op2, op3} - {op1, op3} = {op0, op2}
+    #[test]
+    fn subtract_disjoint_result_in_dag() {
+        let input = make_input(
+            vec![
+                vec![TensorId(0)],
+                vec![TensorId(1)],
+                vec![TensorId(2)],
+                vec![TensorId(3), TensorId(4)],
+            ],
+            vec![
+                vec![TensorId(1), TensorId(2)],
+                vec![TensorId(3)],
+                vec![TensorId(4)],
+                vec![TensorId(5)],
+            ],
+            6,
+        );
+        let graph = ComputationGraph::new(&input);
+        let full = Subgraph::from_nodes(
+            &graph,
+            [
+                OperationId(0),
+                OperationId(1),
+                OperationId(2),
+                OperationId(3),
+            ],
+        );
+        let branch = Subgraph::from_nodes(&graph, [OperationId(1), OperationId(3)]);
+
+        let result = full.subtract(&branch);
+        assert_eq!(result.nodes(), &[OperationId(0), OperationId(2)]);
+    }
+
+    // empty subgraph has 0 components
+    #[test]
+    fn components_empty_subgraph() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)]],
+            3,
+        );
+        let graph = ComputationGraph::new(&input);
+        let sub = Subgraph::from_nodes(&graph, []);
+
+        assert_eq!(sub.components(), 0);
+    }
+
+    // t0 --> [op0] --t1-->
+    //
+    // {op0} => 1 component
+    #[test]
+    fn components_single_node() {
+        let input = make_input(vec![vec![TensorId(0)]], vec![vec![TensorId(1)]], 2);
+        let graph = ComputationGraph::new(&input);
+        let sub = Subgraph::from_nodes(&graph, [OperationId(0)]);
+
+        assert_eq!(sub.components(), 1);
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // {op0, op1, op2} => 1 component (all connected in a chain)
+    #[test]
+    fn components_linear_chain() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let sub = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+
+        assert_eq!(sub.components(), 1);
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // {op0, op2} => 2 components (op1 removed breaks the chain)
+    #[test]
+    fn components_broken_chain() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let sub = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(2)]);
+
+        assert_eq!(sub.components(), 2);
+    }
+
+    // t0 --> [op0] --t2--> [op1] --t3-->
+    //
+    // t1 --> [op2] --t4--> [op3] --t5-->
+    //
+    // {op0, op1, op2, op3} => 2 components (two disconnected chains)
+    #[test]
+    fn components_two_disconnected_chains() {
+        let input = make_input(
+            vec![
+                vec![TensorId(0)],
+                vec![TensorId(2)],
+                vec![TensorId(1)],
+                vec![TensorId(4)],
+            ],
+            vec![
+                vec![TensorId(2)],
+                vec![TensorId(3)],
+                vec![TensorId(4)],
+                vec![TensorId(5)],
+            ],
+            6,
+        );
+        let graph = ComputationGraph::new(&input);
+        let sub = Subgraph::from_nodes(
+            &graph,
+            [
+                OperationId(0),
+                OperationId(1),
+                OperationId(2),
+                OperationId(3),
+            ],
+        );
+
+        assert_eq!(sub.components(), 2);
+    }
+
+    //              /--t1--> [op1] --t3--\
+    // t0 --> [op0]                       +--> [op3] --t5-->
+    //              \--t2--> [op2] --t4--/
+    //
+    // {op0, op1, op2, op3} => 1 component
+    #[test]
+    fn components_branching_dag_all_nodes() {
+        let input = make_input(
+            vec![
+                vec![TensorId(0)],
+                vec![TensorId(1)],
+                vec![TensorId(2)],
+                vec![TensorId(3), TensorId(4)],
+            ],
+            vec![
+                vec![TensorId(1), TensorId(2)],
+                vec![TensorId(3)],
+                vec![TensorId(4)],
+                vec![TensorId(5)],
+            ],
+            6,
+        );
+        let graph = ComputationGraph::new(&input);
+        let sub = Subgraph::from_nodes(
+            &graph,
+            [
+                OperationId(0),
+                OperationId(1),
+                OperationId(2),
+                OperationId(3),
+            ],
+        );
+
+        assert_eq!(sub.components(), 1);
+    }
+
+    //              /--t1--> [op1] --t3--\
+    // t0 --> [op0]                       +--> [op3] --t5-->
+    //              \--t2--> [op2] --t4--/
+    //
+    // {op1, op2} => 2 components (branches without shared parent or child)
+    #[test]
+    fn components_parallel_branches() {
+        let input = make_input(
+            vec![
+                vec![TensorId(0)],
+                vec![TensorId(1)],
+                vec![TensorId(2)],
+                vec![TensorId(3), TensorId(4)],
+            ],
+            vec![
+                vec![TensorId(1), TensorId(2)],
+                vec![TensorId(3)],
+                vec![TensorId(4)],
+                vec![TensorId(5)],
+            ],
+            6,
+        );
+        let graph = ComputationGraph::new(&input);
+        let sub = Subgraph::from_nodes(&graph, [OperationId(1), OperationId(2)]);
+
+        assert_eq!(sub.components(), 2);
+    }
+
+    //              /--t1--> [op1] --t3--\
+    // t0 --> [op0]                       +--> [op3] --t5-->
+    //              \--t2--> [op2] --t4--/
+    //
+    // {op1, op2, op3} => 1 component (op3 connects both branches)
+    #[test]
+    fn components_branches_joined_by_sink() {
+        let input = make_input(
+            vec![
+                vec![TensorId(0)],
+                vec![TensorId(1)],
+                vec![TensorId(2)],
+                vec![TensorId(3), TensorId(4)],
+            ],
+            vec![
+                vec![TensorId(1), TensorId(2)],
+                vec![TensorId(3)],
+                vec![TensorId(4)],
+                vec![TensorId(5)],
+            ],
+            6,
+        );
+        let graph = ComputationGraph::new(&input);
+        let sub = Subgraph::from_nodes(&graph, [OperationId(1), OperationId(2), OperationId(3)]);
+
+        assert_eq!(sub.components(), 1);
+    }
+
+    // t0 --> [op0] --t1--> [op1] --t2--> [op2] --t3-->
+    //
+    // {op0} - {op1, op2} = {op0}  (other has elements not in self)
+    #[test]
+    fn subtract_with_non_overlapping_other() {
+        let input = make_input(
+            vec![vec![TensorId(0)], vec![TensorId(1)], vec![TensorId(2)]],
+            vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
+            4,
+        );
+        let graph = ComputationGraph::new(&input);
+        let a = Subgraph::from_nodes(&graph, [OperationId(0)]);
+        let b = Subgraph::from_nodes(&graph, [OperationId(1), OperationId(2)]);
+
+        assert_eq!(a.subtract(&b).nodes(), &[OperationId(0)]);
     }
 }
