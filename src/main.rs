@@ -6,6 +6,7 @@ use clap::Parser;
 
 pub mod graph;
 pub mod input_format;
+pub mod schedule;
 pub mod tiling;
 use crate::input_format::InputFormat;
 
