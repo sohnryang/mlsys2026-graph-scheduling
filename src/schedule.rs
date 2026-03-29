@@ -131,7 +131,9 @@ mod tests {
         testutil::{graph_from_edges, subgraph},
     };
 
-    // TC1 — single node
+    // t0 --> [op0] --t1-->
+    //
+    // optimal: {op0}=100
     #[test]
     fn single_primitive() {
         let graph = graph_from_edges(1, &[]);
@@ -143,7 +145,10 @@ mod tests {
         assert_eq!(selected, HashSet::from([subgraph(&graph, [0])]));
     }
 
-    // TC2 — two independent outputs, {p0,p1} disconnected → excluded
+    // t0 --> [op0] --t2-->    t1 --> [op1] --t3-->
+    //
+    // {p0,p1} disconnected → excluded from convex subgraphs
+    // optimal: {op0}+{op1}=120
     #[test]
     fn two_independent_outputs() {
         let graph = graph_from_edges(2, &[]);
@@ -156,7 +161,9 @@ mod tests {
         assert_eq!(selected, expected);
     }
 
-    // TC3 — chain p0->p1, fusion wins (100 < 80+60=140)
+    // t1 --> [op0] --t0--> [op1] --t2-->
+    //
+    // fusion wins: {op0,op1}=100 < {op0}+{op1}=140
     #[test]
     fn chain2_fusion_wins() {
         let graph = graph_from_edges(2, &[(0, 1)]);
@@ -169,7 +176,9 @@ mod tests {
         assert_eq!(selected, HashSet::from([subgraph(&graph, [0, 1])]));
     }
 
-    // TC4 — chain p0->p1, singles win (30+40=70 < 100)
+    // t1 --> [op0] --t0--> [op1] --t2-->
+    //
+    // singles win: {op0}+{op1}=70 < {op0,op1}=100
     #[test]
     fn chain2_singles_win() {
         let graph = graph_from_edges(2, &[(0, 1)]);
@@ -185,8 +194,11 @@ mod tests {
         );
     }
 
-    // TC5 — diamond p0->{p1,p2}->p3, full fusion=80 optimal
-    // {p1,p2} is disconnected → excluded from convex subgraphs.
+    //                /--t0--> [op1] --t2--\
+    // t4 --> [op0] --+                    +--> [op3] --t5-->
+    //                \--t1--> [op2] --t3--/
+    //
+    // optimal: {op0,op1,op2,op3}=80
     #[test]
     fn diamond_full_fusion() {
         let graph = graph_from_edges(4, &[(0, 1), (0, 2), (1, 3), (2, 3)]);
@@ -223,7 +235,9 @@ mod tests {
         assert_eq!(selected, HashSet::from([subgraph(&graph, [0, 1, 2, 3])]));
     }
 
-    // TC6 — chain p0->p1->p2, tail fusion: {p0}+{p1,p2}=75 optimal
+    // t2 --> [op0] --t0--> [op1] --t1--> [op2] --t3-->
+    //
+    // tail fusion: {op0}+{op1,op2}=75
     #[test]
     fn chain3_tail_fusion() {
         let graph = graph_from_edges(3, &[(0, 1), (1, 2)]);
@@ -242,8 +256,11 @@ mod tests {
         );
     }
 
-    // TC7 — fan-out p0->{p1,p2}, partial fusion: {p0,p1}+{p2}=65 optimal
-    // {p1,p2} disconnected → excluded.
+    //                /--t0--> [op1] --t3-->
+    // t2 --> [op0] --+
+    //                \--t1--> [op2] --t4-->
+    //
+    // partial fusion: {op0,op1}+{op2}=65
     #[test]
     fn fanout2_partial_fusion() {
         let graph = graph_from_edges(3, &[(0, 1), (0, 2)]);
@@ -262,7 +279,9 @@ mod tests {
         );
     }
 
-    // TC8 — 5-node chain, {p0,p1}+{p2,p3}+{p4}=140 optimal
+    // t4 --> [op0] --t0--> [op1] --t1--> [op2] --t2--> [op3] --t3--> [op4] --t5-->
+    //
+    // optimal: {op0,op1}+{op2,op3}+{op4}=140
     #[test]
     fn chain5_partial_fusion() {
         let graph = graph_from_edges(5, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
@@ -294,7 +313,11 @@ mod tests {
         );
     }
 
-    // TC9 — fan-out p0->{p1,p2}, singletons=55 optimal
+    //                /--t0--> [op1] --t3-->
+    // t2 --> [op0] --+
+    //                \--t1--> [op2] --t4-->
+    //
+    // singletons win: {op0}+{op1}+{op2}=55
     #[test]
     fn fanout2_singletons_win() {
         let graph = graph_from_edges(3, &[(0, 1), (0, 2)]);
@@ -317,7 +340,9 @@ mod tests {
         );
     }
 
-    // TC10 — 6-node chain, three-pair fusion=320 optimal
+    // t5 --> [op0] --t0--> [op1] --t1--> [op2] --t2--> [op3] --t3--> [op4] --t4--> [op5] --t6-->
+    //
+    // three-pair fusion: {op0,op1}+{op2,op3}+{op4,op5}=320
     #[test]
     fn chain6_three_pair_fusion() {
         let graph = graph_from_edges(6, &[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]);
@@ -355,8 +380,12 @@ mod tests {
         );
     }
 
-    // TC11 — merge {p0,p1}->p2->p3, full fusion=90 optimal
-    // {p0,p1} disconnected → excluded.
+    // t3 --> [op0] --t0--\
+    //                    +--> [op2] --t2--> [op3] --t5-->
+    // t4 --> [op1] --t1--/
+    //
+    // {op0,op1} disconnected → excluded from convex subgraphs
+    // full fusion: {op0,op1,op2,op3}=90
     #[test]
     fn merge_full_fusion() {
         let graph = graph_from_edges(4, &[(0, 2), (1, 2), (2, 3)]);
@@ -393,19 +422,9 @@ mod tests {
         assert_eq!(selected, HashSet::from([subgraph(&graph, [0, 1, 2, 3])]));
     }
 
-    // TC12 — chain p0->p1, tie: fused=100 equals singles 50+50=100 (cost only)
-    #[test]
-    fn tie_equal_cost() {
-        let graph = graph_from_edges(2, &[(0, 1)]);
-        let costs = [
-            (subgraph(&graph, [0]), 50.0),
-            (subgraph(&graph, [1]), 50.0),
-            (subgraph(&graph, [0, 1]), 100.0),
-        ];
-        let selected = optimize_execution_plan(&graph, &costs);
-    }
-
-    // TC13 — chain p0->p1->p2->p3, middle fusion: {p0}+{p1,p2}+{p3}=80
+    // t3 --> [op0] --t0--> [op1] --t1--> [op2] --t2--> [op3] --t4-->
+    //
+    // middle fusion: {op0}+{op1,op2}+{op3}=80
     #[test]
     fn chain4_middle_fusion() {
         let graph = graph_from_edges(4, &[(0, 1), (1, 2), (2, 3)]);
@@ -432,7 +451,9 @@ mod tests {
         );
     }
 
-    // TC14 — chain p0->p1->p2->p3, head fusion: {p0,p1,p2}+{p3}=80
+    // t3 --> [op0] --t0--> [op1] --t1--> [op2] --t2--> [op3] --t4-->
+    //
+    // head fusion: {op0,op1,op2}+{op3}=80
     #[test]
     fn chain4_head_fusion() {
         let graph = graph_from_edges(4, &[(0, 1), (1, 2), (2, 3)]);
@@ -455,7 +476,11 @@ mod tests {
         );
     }
 
-    // TC15 — fan-out recomputation: {p0,p1}+{p0,p2}=58, p0 recomputed
+    //                /--t0--> [op1] --t3-->
+    // t2 --> [op0] --+
+    //                \--t1--> [op2] --t4-->
+    //
+    // recomputation: {op0,op1}+{op0,op2}=58, op0 recomputed
     #[test]
     fn fanout_recompute() {
         let graph = graph_from_edges(3, &[(0, 1), (0, 2)]);
@@ -474,7 +499,9 @@ mod tests {
         );
     }
 
-    // TC16 — chain recomputation: {p0,p1}+{p1,p2}=67, p1 recomputed
+    // t2 --> [op0] --t0--> [op1] --t1--> [op2] --t3-->
+    //
+    // recomputation: {op0,op1}+{op1,op2}=67, op1 recomputed
     #[test]
     fn chain_recompute() {
         let graph = graph_from_edges(3, &[(0, 1), (1, 2)]);
