@@ -127,9 +127,9 @@ mod tests {
 
     use super::extract_convex_subgraphs;
     use crate::{
-        graph::{ComputationGraph, OperationId, Subgraph, TensorId},
+        graph::{ComputationGraph, TensorId},
         schedule::optimize_execution_plan,
-        testutil::make_input,
+        testutil::{make_input, subgraph},
     };
 
     //              /--t1--> [op1] --t3--\
@@ -169,46 +169,17 @@ mod tests {
         let graph = ComputationGraph::new(&input);
         let convex_subgraphs = extract_convex_subgraphs(&graph);
         let costs: [(_, f64); _] = [
-            (Subgraph::from_nodes(&graph, [OperationId(0)]), 20.0),
-            (Subgraph::from_nodes(&graph, [OperationId(1)]), 30.0),
-            (Subgraph::from_nodes(&graph, [OperationId(2)]), 25.0),
-            (Subgraph::from_nodes(&graph, [OperationId(3)]), 40.0),
-            (
-                Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]),
-                45.0,
-            ),
-            (
-                Subgraph::from_nodes(&graph, [OperationId(0), OperationId(2)]),
-                42.0,
-            ),
-            (
-                Subgraph::from_nodes(&graph, [OperationId(1), OperationId(3)]),
-                55.0,
-            ),
-            (
-                Subgraph::from_nodes(&graph, [OperationId(2), OperationId(3)]),
-                52.0,
-            ),
-            (
-                Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]),
-                65.0,
-            ),
-            (
-                Subgraph::from_nodes(&graph, [OperationId(1), OperationId(2), OperationId(3)]),
-                70.0,
-            ),
-            (
-                Subgraph::from_nodes(
-                    &graph,
-                    [
-                        OperationId(0),
-                        OperationId(1),
-                        OperationId(2),
-                        OperationId(3),
-                    ],
-                ),
-                80.0,
-            ),
+            (subgraph(&graph, [0]), 20.0),
+            (subgraph(&graph, [1]), 30.0),
+            (subgraph(&graph, [2]), 25.0),
+            (subgraph(&graph, [3]), 40.0),
+            (subgraph(&graph, [0, 1]), 45.0),
+            (subgraph(&graph, [0, 2]), 42.0),
+            (subgraph(&graph, [1, 3]), 55.0),
+            (subgraph(&graph, [2, 3]), 52.0),
+            (subgraph(&graph, [0, 1, 2]), 65.0),
+            (subgraph(&graph, [1, 2, 3]), 70.0),
+            (subgraph(&graph, [0, 1, 2, 3]), 80.0),
         ];
         let expected = HashSet::from_iter(costs.iter().map(|(s, _)| s.clone()));
         assert_eq!(convex_subgraphs, expected);

@@ -496,8 +496,8 @@ impl std::hash::Hash for Subgraph<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ComputationGraph, OperationId, Subgraph, TensorId};
-    use crate::testutil::make_input;
+    use super::{ComputationGraph, OperationId, TensorId};
+    use crate::testutil::{make_input, subgraph};
 
     fn assert_is_topological_order(graph: &ComputationGraph, order: &[OperationId]) {
         let num_ops = graph.operations.len();
@@ -722,8 +722,8 @@ mod tests {
             4,
         );
         let graph = ComputationGraph::new(&input);
-        let sub = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
-        let sup = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+        let sub = subgraph(&graph, [0, 1]);
+        let sup = subgraph(&graph, [0, 1, 2]);
 
         assert!(sub.is_subset(&sup));
         assert!(!sup.is_subset(&sub));
@@ -740,8 +740,8 @@ mod tests {
             4,
         );
         let graph = ComputationGraph::new(&input);
-        let a = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
-        let b = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+        let a = subgraph(&graph, [0, 1, 2]);
+        let b = subgraph(&graph, [0, 1, 2]);
 
         assert!(a.is_subset(&b));
         assert!(b.is_subset(&a));
@@ -758,8 +758,8 @@ mod tests {
             4,
         );
         let graph = ComputationGraph::new(&input);
-        let empty = Subgraph::from_nodes(&graph, []);
-        let non_empty = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let empty = subgraph(&graph, []);
+        let non_empty = subgraph(&graph, [0, 1]);
 
         assert!(empty.is_subset(&non_empty));
         assert!(empty.is_subset(&empty));
@@ -788,8 +788,8 @@ mod tests {
             6,
         );
         let graph = ComputationGraph::new(&input);
-        let a = Subgraph::from_nodes(&graph, [OperationId(1), OperationId(3)]);
-        let b = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(2)]);
+        let a = subgraph(&graph, [1, 3]);
+        let b = subgraph(&graph, [0, 2]);
 
         assert!(!a.is_subset(&b));
         assert!(!b.is_subset(&a));
@@ -819,17 +819,9 @@ mod tests {
             6,
         );
         let graph = ComputationGraph::new(&input);
-        let full = Subgraph::from_nodes(
-            &graph,
-            [
-                OperationId(0),
-                OperationId(1),
-                OperationId(2),
-                OperationId(3),
-            ],
-        );
-        let branch = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(2)]);
-        let single = Subgraph::from_nodes(&graph, [OperationId(1)]);
+        let full = subgraph(&graph, [0, 1, 2, 3]);
+        let branch = subgraph(&graph, [0, 2]);
+        let single = subgraph(&graph, [1]);
 
         assert!(branch.is_subset(&full));
         assert!(single.is_subset(&full));
@@ -847,8 +839,8 @@ mod tests {
             4,
         );
         let graph = ComputationGraph::new(&input);
-        let all = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
-        let mid = Subgraph::from_nodes(&graph, [OperationId(1)]);
+        let all = subgraph(&graph, [0, 1, 2]);
+        let mid = subgraph(&graph, [1]);
 
         let result = all.subtract(&mid);
         assert_eq!(result.nodes(), &[OperationId(0), OperationId(2)]);
@@ -865,8 +857,8 @@ mod tests {
             4,
         );
         let graph = ComputationGraph::new(&input);
-        let a = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
-        let b = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+        let a = subgraph(&graph, [0, 1, 2]);
+        let b = subgraph(&graph, [0, 1, 2]);
 
         assert!(a.subtract(&b).nodes().is_empty());
     }
@@ -882,8 +874,8 @@ mod tests {
             4,
         );
         let graph = ComputationGraph::new(&input);
-        let a = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(2)]);
-        let empty = Subgraph::from_nodes(&graph, []);
+        let a = subgraph(&graph, [0, 2]);
+        let empty = subgraph(&graph, []);
 
         assert_eq!(
             a.subtract(&empty).nodes(),
@@ -902,8 +894,8 @@ mod tests {
             4,
         );
         let graph = ComputationGraph::new(&input);
-        let empty = Subgraph::from_nodes(&graph, []);
-        let b = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let empty = subgraph(&graph, []);
+        let b = subgraph(&graph, [0, 1]);
 
         assert!(empty.subtract(&b).nodes().is_empty());
     }
@@ -931,16 +923,8 @@ mod tests {
             6,
         );
         let graph = ComputationGraph::new(&input);
-        let full = Subgraph::from_nodes(
-            &graph,
-            [
-                OperationId(0),
-                OperationId(1),
-                OperationId(2),
-                OperationId(3),
-            ],
-        );
-        let branch = Subgraph::from_nodes(&graph, [OperationId(1), OperationId(3)]);
+        let full = subgraph(&graph, [0, 1, 2, 3]);
+        let branch = subgraph(&graph, [1, 3]);
 
         let result = full.subtract(&branch);
         assert_eq!(result.nodes(), &[OperationId(0), OperationId(2)]);
@@ -955,7 +939,7 @@ mod tests {
             3,
         );
         let graph = ComputationGraph::new(&input);
-        let sub = Subgraph::from_nodes(&graph, []);
+        let sub = subgraph(&graph, []);
 
         assert_eq!(sub.components(), 0);
     }
@@ -967,7 +951,7 @@ mod tests {
     fn components_single_node() {
         let input = make_input(vec![vec![TensorId(0)]], vec![vec![TensorId(1)]], 2);
         let graph = ComputationGraph::new(&input);
-        let sub = Subgraph::from_nodes(&graph, [OperationId(0)]);
+        let sub = subgraph(&graph, [0]);
 
         assert_eq!(sub.components(), 1);
     }
@@ -983,7 +967,7 @@ mod tests {
             4,
         );
         let graph = ComputationGraph::new(&input);
-        let sub = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+        let sub = subgraph(&graph, [0, 1, 2]);
 
         assert_eq!(sub.components(), 1);
     }
@@ -999,7 +983,7 @@ mod tests {
             4,
         );
         let graph = ComputationGraph::new(&input);
-        let sub = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(2)]);
+        let sub = subgraph(&graph, [0, 2]);
 
         assert_eq!(sub.components(), 2);
     }
@@ -1027,15 +1011,7 @@ mod tests {
             6,
         );
         let graph = ComputationGraph::new(&input);
-        let sub = Subgraph::from_nodes(
-            &graph,
-            [
-                OperationId(0),
-                OperationId(1),
-                OperationId(2),
-                OperationId(3),
-            ],
-        );
+        let sub = subgraph(&graph, [0, 1, 2, 3]);
 
         assert_eq!(sub.components(), 2);
     }
@@ -1063,15 +1039,7 @@ mod tests {
             6,
         );
         let graph = ComputationGraph::new(&input);
-        let sub = Subgraph::from_nodes(
-            &graph,
-            [
-                OperationId(0),
-                OperationId(1),
-                OperationId(2),
-                OperationId(3),
-            ],
-        );
+        let sub = subgraph(&graph, [0, 1, 2, 3]);
 
         assert_eq!(sub.components(), 1);
     }
@@ -1099,7 +1067,7 @@ mod tests {
             6,
         );
         let graph = ComputationGraph::new(&input);
-        let sub = Subgraph::from_nodes(&graph, [OperationId(1), OperationId(2)]);
+        let sub = subgraph(&graph, [1, 2]);
 
         assert_eq!(sub.components(), 2);
     }
@@ -1127,7 +1095,7 @@ mod tests {
             6,
         );
         let graph = ComputationGraph::new(&input);
-        let sub = Subgraph::from_nodes(&graph, [OperationId(1), OperationId(2), OperationId(3)]);
+        let sub = subgraph(&graph, [1, 2, 3]);
 
         assert_eq!(sub.components(), 1);
     }
@@ -1143,8 +1111,8 @@ mod tests {
             4,
         );
         let graph = ComputationGraph::new(&input);
-        let a = Subgraph::from_nodes(&graph, [OperationId(0)]);
-        let b = Subgraph::from_nodes(&graph, [OperationId(1), OperationId(2)]);
+        let a = subgraph(&graph, [0]);
+        let b = subgraph(&graph, [1, 2]);
 
         assert_eq!(a.subtract(&b).nodes(), &[OperationId(0)]);
     }

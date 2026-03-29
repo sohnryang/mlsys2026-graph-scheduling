@@ -1,4 +1,4 @@
-use crate::graph::{ComputationGraph, OperationType, TensorId};
+use crate::graph::{ComputationGraph, OperationId, OperationType, Subgraph, TensorId};
 use crate::input_format::{DeviceParameters, InputFormat};
 
 pub fn make_input(
@@ -60,6 +60,13 @@ pub fn pointwise_graph(
         outputs,
         vec![OperationType::Pointwise; num_ops],
     )
+}
+
+pub fn subgraph<'a>(
+    graph: &'a ComputationGraph,
+    ops: impl IntoIterator<Item = usize>,
+) -> Subgraph<'a> {
+    Subgraph::from_nodes(graph, ops.into_iter().map(OperationId))
 }
 
 pub fn load_input(filename: &str) -> InputFormat {

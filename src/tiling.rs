@@ -377,9 +377,9 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{Axis, TileShape, propagate_tile_shape, search_tile_values};
-    use crate::graph::{ComputationGraph, OperationId, OperationType, Subgraph, TensorId};
+    use crate::graph::{ComputationGraph, OperationType, TensorId};
     use crate::input_format::{DeviceParameters, InputFormat};
-    use crate::testutil::{load_input, make_graph, pointwise_graph};
+    use crate::testutil::{load_input, make_graph, pointwise_graph, subgraph};
 
     fn assert_shape(
         shapes: &HashMap<TensorId, TileShape>,
@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn single_pointwise() {
         let graph = pointwise_graph(vec![vec![TensorId(0)]], vec![vec![TensorId(1)]], 2);
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0)]);
+        let subgraph = subgraph(&graph, [0]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(1)).unwrap();
 
         assert_shape(
@@ -429,7 +429,7 @@ mod tests {
             vec![vec![TensorId(1)], vec![TensorId(2)]],
             3,
         );
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let subgraph = subgraph(&graph, [0, 1]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(2)).unwrap();
 
         assert_shape(
@@ -468,7 +468,7 @@ mod tests {
             vec![vec![TensorId(2)]],
             vec![OperationType::MatMul],
         );
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0)]);
+        let subgraph = subgraph(&graph, [0]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(2)).unwrap();
 
         assert_shape(
@@ -508,7 +508,7 @@ mod tests {
             vec![vec![TensorId(2)], vec![TensorId(3)]],
             vec![OperationType::MatMul, OperationType::Pointwise],
         );
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let subgraph = subgraph(&graph, [0, 1]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(3)).unwrap();
 
         assert_shape(
@@ -551,8 +551,7 @@ mod tests {
             vec![vec![TensorId(1)], vec![TensorId(2)], vec![TensorId(3)]],
             4,
         );
-        let subgraph =
-            Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+        let subgraph = subgraph(&graph, [0, 1, 2]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(3)).unwrap();
 
         for t in 0..4 {
@@ -589,15 +588,7 @@ mod tests {
             ],
             6,
         );
-        let subgraph = Subgraph::from_nodes(
-            &graph,
-            [
-                OperationId(0),
-                OperationId(1),
-                OperationId(2),
-                OperationId(3),
-            ],
-        );
+        let subgraph = subgraph(&graph, [0, 1, 2, 3]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(5)).unwrap();
 
         for t in 0..6 {
@@ -634,7 +625,7 @@ mod tests {
             vec![vec![TensorId(2)], vec![TensorId(4)]],
             vec![OperationType::MatMul, OperationType::MatMul],
         );
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let subgraph = subgraph(&graph, [0, 1]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(4)).unwrap();
 
         // t4 is output: (M, N)
@@ -692,7 +683,7 @@ mod tests {
             vec![vec![TensorId(1)], vec![TensorId(3)]],
             vec![OperationType::Pointwise, OperationType::MatMul],
         );
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let subgraph = subgraph(&graph, [0, 1]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(3)).unwrap();
 
         assert_shape(
@@ -751,8 +742,7 @@ mod tests {
                 OperationType::MatMul,
             ],
         );
-        let subgraph =
-            Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+        let subgraph = subgraph(&graph, [0, 1, 2]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(5)).unwrap();
 
         assert_shape(
@@ -801,7 +791,7 @@ mod tests {
     #[test]
     fn single_op_subgraph() {
         let graph = pointwise_graph(vec![vec![TensorId(0)]], vec![vec![TensorId(1)]], 2);
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0)]);
+        let subgraph = subgraph(&graph, [0]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(1)).unwrap();
 
         assert_eq!(shapes.len(), 2);
@@ -844,7 +834,7 @@ mod tests {
             vec![vec![TensorId(2)], vec![TensorId(4)]],
             vec![OperationType::MatMul, OperationType::Pointwise],
         );
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let subgraph = subgraph(&graph, [0, 1]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(4)).unwrap();
 
         assert_shape(
@@ -903,7 +893,7 @@ mod tests {
             ],
             vec![OperationType::Pointwise, OperationType::MatMul],
         );
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let subgraph = subgraph(&graph, [0, 1]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(3)).unwrap();
 
         // t3 is output: (M, N)
@@ -966,8 +956,7 @@ mod tests {
                 OperationType::MatMul,
             ],
         );
-        let subgraph =
-            Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]);
+        let subgraph = subgraph(&graph, [0, 1, 2]);
         let (shapes, mut constraints) = propagate_tile_shape(&subgraph, TensorId(6)).unwrap();
 
         // t6 is output: (M, N)
@@ -1030,7 +1019,7 @@ mod tests {
     fn official_repo_example1() {
         let input = load_input("official_example1.json");
         let graph = ComputationGraph::new(&input);
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let subgraph = subgraph(&graph, [0, 1]);
 
         let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters).unwrap();
         assert_eq!((m, n, k), (128, 128, 1));
@@ -1046,7 +1035,7 @@ mod tests {
     fn official_repo_example2() {
         let input = load_input("official_example2.json");
         let graph = ComputationGraph::new(&input);
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let subgraph = subgraph(&graph, [0, 1]);
 
         let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters).unwrap();
         assert_eq!((m, n, k), (128, 128, 1));
@@ -1065,7 +1054,7 @@ mod tests {
     fn official_repo_example5() {
         let input = load_input("official_example5.json");
         let graph = ComputationGraph::new(&input);
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let subgraph = subgraph(&graph, [0, 1]);
 
         let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters).unwrap();
         assert_eq!((m, n, k), (128, 128, 43));
@@ -1082,13 +1071,16 @@ mod tests {
         let graph = ComputationGraph::new(&InputFormat {
             widths: vec![256, 256, 256, 256, 256],
             heights: vec![256, 256, 256, 256, 256],
-            inputs: vec![vec![TensorId(0), TensorId(1)], vec![TensorId(3), TensorId(2)]],
+            inputs: vec![
+                vec![TensorId(0), TensorId(1)],
+                vec![TensorId(3), TensorId(2)],
+            ],
             outputs: vec![vec![TensorId(3)], vec![TensorId(4)]],
             base_costs: vec![2000, 2000],
             op_types: vec![OperationType::MatMul, OperationType::MatMul],
             device_parameters: device_params.clone(),
         });
-        let subgraph = Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]);
+        let subgraph = subgraph(&graph, [0, 1]);
 
         let (m, n, k) = search_tile_values(&subgraph, &device_params).unwrap();
         assert_eq!((m, n, k), (64, 128, 52));
