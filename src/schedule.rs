@@ -519,4 +519,147 @@ mod tests {
             HashSet::from([subgraph(&graph, [0, 1]), subgraph(&graph, [1, 2])])
         );
     }
+
+    //                /--t0--> [op1] --t4-->
+    // t3 --> [op0] --+--t1--> [op2] --t5-->
+    //                \--t2--> [op3] --t6-->
+    //
+    // op0 is multi-output (3 outputs)
+    // {op1,op2}, {op1,op3}, {op2,op3}, {op1,op2,op3} disconnected → excluded
+    // recomputation: {op0,op1}+{op0,op2}+{op0,op3}=75, op0 recomputed 3x
+    #[test]
+    fn wide_fanout_recompute() {
+        let graph = graph_from_edges(4, &[(0, 1), (0, 2), (0, 3)]);
+        let convex = extract_convex_subgraphs(&graph);
+        let expected_convex = HashSet::from([
+            subgraph(&graph, [0]),
+            subgraph(&graph, [1]),
+            subgraph(&graph, [2]),
+            subgraph(&graph, [3]),
+            subgraph(&graph, [0, 1]),
+            subgraph(&graph, [0, 2]),
+            subgraph(&graph, [0, 3]),
+            subgraph(&graph, [0, 1, 2]),
+            subgraph(&graph, [0, 1, 3]),
+            subgraph(&graph, [0, 2, 3]),
+            subgraph(&graph, [0, 1, 2, 3]),
+        ]);
+        assert_eq!(convex, expected_convex);
+
+        let costs = [
+            (subgraph(&graph, [0]), 60.0),
+            (subgraph(&graph, [1]), 30.0),
+            (subgraph(&graph, [2]), 30.0),
+            (subgraph(&graph, [3]), 30.0),
+            (subgraph(&graph, [0, 1]), 25.0),
+            (subgraph(&graph, [0, 2]), 25.0),
+            (subgraph(&graph, [0, 3]), 25.0),
+            (subgraph(&graph, [0, 1, 2]), 80.0),
+            (subgraph(&graph, [0, 1, 3]), 80.0),
+            (subgraph(&graph, [0, 2, 3]), 80.0),
+            (subgraph(&graph, [0, 1, 2, 3]), 100.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([
+                subgraph(&graph, [0, 1]),
+                subgraph(&graph, [0, 2]),
+                subgraph(&graph, [0, 3]),
+            ])
+        );
+    }
+
+    //                /--t0--> [op1] --t2--\
+    // t5 --> [op0] --+                     +--> [op3] --t4--> [op4] --t6-->
+    //                \--t1--> [op2] --t3--/
+    //
+    // op0 is multi-output (2 outputs), op3 is multi-input (2 inputs)
+    // diamond fusion + separate tail: {op0,op1,op2,op3}+{op4}=80
+    #[test]
+    fn diamond_tail_partial_fusion() {
+        let graph = graph_from_edges(5, &[(0, 1), (0, 2), (1, 3), (2, 3), (3, 4)]);
+        let costs = [
+            (subgraph(&graph, [0]), 30.0),
+            (subgraph(&graph, [1]), 25.0),
+            (subgraph(&graph, [2]), 25.0),
+            (subgraph(&graph, [3]), 40.0),
+            (subgraph(&graph, [4]), 15.0),
+            (subgraph(&graph, [0, 1]), 45.0),
+            (subgraph(&graph, [0, 2]), 45.0),
+            (subgraph(&graph, [1, 3]), 50.0),
+            (subgraph(&graph, [2, 3]), 50.0),
+            (subgraph(&graph, [3, 4]), 45.0),
+            (subgraph(&graph, [0, 1, 2]), 55.0),
+            (subgraph(&graph, [1, 2, 3]), 60.0),
+            (subgraph(&graph, [1, 3, 4]), 55.0),
+            (subgraph(&graph, [2, 3, 4]), 55.0),
+            (subgraph(&graph, [1, 2, 3, 4]), 70.0),
+            (subgraph(&graph, [0, 1, 2, 3]), 65.0),
+            (subgraph(&graph, [0, 1, 2, 3, 4]), 100.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([subgraph(&graph, [0, 1, 2, 3]), subgraph(&graph, [4])])
+        );
+    }
+
+    //                                /--t2--> [op3] --t6-->
+    //                /--t0--> [op1]-+
+    // t4 --> [op0] --+               \--t3--> [op4] --t7-->
+    //                \--t1--> [op2] --t5-->
+    //
+    // op0 is multi-output (2 outputs), op1 is multi-output (2 outputs)
+    // fuse right subtree: {op0,op1,op3,op4}+{op2}=85
+    #[test]
+    fn double_fork_subtree_fusion() {
+        let graph = graph_from_edges(5, &[(0, 1), (0, 2), (1, 3), (1, 4)]);
+        let convex = extract_convex_subgraphs(&graph);
+        let expected_convex = HashSet::from([
+            subgraph(&graph, [0]),
+            subgraph(&graph, [1]),
+            subgraph(&graph, [2]),
+            subgraph(&graph, [3]),
+            subgraph(&graph, [4]),
+            subgraph(&graph, [0, 1]),
+            subgraph(&graph, [0, 2]),
+            subgraph(&graph, [1, 3]),
+            subgraph(&graph, [1, 4]),
+            subgraph(&graph, [0, 1, 2]),
+            subgraph(&graph, [0, 1, 3]),
+            subgraph(&graph, [0, 1, 4]),
+            subgraph(&graph, [1, 3, 4]),
+            subgraph(&graph, [0, 1, 2, 3]),
+            subgraph(&graph, [0, 1, 2, 4]),
+            subgraph(&graph, [0, 1, 3, 4]),
+            subgraph(&graph, [0, 1, 2, 3, 4]),
+        ]);
+        assert_eq!(convex, expected_convex);
+
+        let costs = [
+            (subgraph(&graph, [0]), 40.0),
+            (subgraph(&graph, [1]), 35.0),
+            (subgraph(&graph, [2]), 30.0),
+            (subgraph(&graph, [3]), 20.0),
+            (subgraph(&graph, [4]), 20.0),
+            (subgraph(&graph, [0, 1]), 55.0),
+            (subgraph(&graph, [0, 2]), 50.0),
+            (subgraph(&graph, [1, 3]), 40.0),
+            (subgraph(&graph, [1, 4]), 40.0),
+            (subgraph(&graph, [0, 1, 2]), 75.0),
+            (subgraph(&graph, [0, 1, 3]), 60.0),
+            (subgraph(&graph, [0, 1, 4]), 60.0),
+            (subgraph(&graph, [1, 3, 4]), 45.0),
+            (subgraph(&graph, [0, 1, 2, 3]), 85.0),
+            (subgraph(&graph, [0, 1, 2, 4]), 85.0),
+            (subgraph(&graph, [0, 1, 3, 4]), 55.0),
+            (subgraph(&graph, [0, 1, 2, 3, 4]), 100.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([subgraph(&graph, [0, 1, 3, 4]), subgraph(&graph, [2])])
+        );
+    }
 }
