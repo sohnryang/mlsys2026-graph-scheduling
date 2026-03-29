@@ -127,48 +127,86 @@ mod tests {
 
     use super::extract_convex_subgraphs;
     use crate::{
-        graph::{ComputationGraph, TensorId},
         schedule::optimize_execution_plan,
-        testutil::{make_input, subgraph},
+        testutil::{graph_from_edges, subgraph},
     };
 
-    //              /--t1--> [op1] --t3--\
-    // t0 --> [op0]                       +--> [op3] --t5-->
-    //              \--t2--> [op2] --t4--/
-    //
-    // convex subgraphs and costs: {
-    //   {op0} -> 20,
-    //   {op1} -> 30,
-    //   {op2} -> 25,
-    //   {op3} -> 40,
-    //   {op0, op1} -> 45,
-    //   {op0, op2} -> 42,
-    //   {op1, op3} -> 55,
-    //   {op2, op3} -> 52,
-    //   {op0, op1, op2} -> 65,
-    //   {op1, op2, op3} -> 70,
-    //   {op0, op1, op2, op3} -> 80,
-    // }
+    // TC1 — single node
     #[test]
-    fn skip_connection_convex_subgraphs() {
-        let input = make_input(
-            vec![
-                vec![TensorId(0)],
-                vec![TensorId(1)],
-                vec![TensorId(2)],
-                vec![TensorId(3), TensorId(4)],
-            ],
-            vec![
-                vec![TensorId(1), TensorId(2)],
-                vec![TensorId(3)],
-                vec![TensorId(4)],
-                vec![TensorId(5)],
-            ],
-            6,
+    fn single_primitive() {
+        let graph = graph_from_edges(1, &[]);
+        let convex = extract_convex_subgraphs(&graph);
+        assert_eq!(convex, HashSet::from([subgraph(&graph, [0])]));
+
+        let costs = [(subgraph(&graph, [0]), 100.0)];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(selected, HashSet::from([subgraph(&graph, [0])]));
+    }
+
+    // TC2 — two independent outputs, {p0,p1} disconnected → excluded
+    #[test]
+    fn two_independent_outputs() {
+        let graph = graph_from_edges(2, &[]);
+        let convex = extract_convex_subgraphs(&graph);
+        let expected = HashSet::from([subgraph(&graph, [0]), subgraph(&graph, [1])]);
+        assert_eq!(convex, expected);
+
+        let costs = [(subgraph(&graph, [0]), 50.0), (subgraph(&graph, [1]), 70.0)];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(selected, expected);
+    }
+
+    // TC3 — chain p0->p1, fusion wins (100 < 80+60=140)
+    #[test]
+    fn chain2_fusion_wins() {
+        let graph = graph_from_edges(2, &[(0, 1)]);
+        let costs = [
+            (subgraph(&graph, [0]), 80.0),
+            (subgraph(&graph, [1]), 60.0),
+            (subgraph(&graph, [0, 1]), 100.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(selected, HashSet::from([subgraph(&graph, [0, 1])]));
+    }
+
+    // TC4 — chain p0->p1, singles win (30+40=70 < 100)
+    #[test]
+    fn chain2_singles_win() {
+        let graph = graph_from_edges(2, &[(0, 1)]);
+        let costs = [
+            (subgraph(&graph, [0]), 30.0),
+            (subgraph(&graph, [1]), 40.0),
+            (subgraph(&graph, [0, 1]), 100.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([subgraph(&graph, [0]), subgraph(&graph, [1])])
         );
-        let graph = ComputationGraph::new(&input);
-        let convex_subgraphs = extract_convex_subgraphs(&graph);
-        let costs: [(_, f64); _] = [
+    }
+
+    // TC5 — diamond p0->{p1,p2}->p3, full fusion=80 optimal
+    // {p1,p2} is disconnected → excluded from convex subgraphs.
+    #[test]
+    fn diamond_full_fusion() {
+        let graph = graph_from_edges(4, &[(0, 1), (0, 2), (1, 3), (2, 3)]);
+        let convex = extract_convex_subgraphs(&graph);
+        let expected_convex = HashSet::from([
+            subgraph(&graph, [0]),
+            subgraph(&graph, [1]),
+            subgraph(&graph, [2]),
+            subgraph(&graph, [3]),
+            subgraph(&graph, [0, 1]),
+            subgraph(&graph, [0, 2]),
+            subgraph(&graph, [1, 3]),
+            subgraph(&graph, [2, 3]),
+            subgraph(&graph, [0, 1, 2]),
+            subgraph(&graph, [1, 2, 3]),
+            subgraph(&graph, [0, 1, 2, 3]),
+        ]);
+        assert_eq!(convex, expected_convex);
+
+        let costs = [
             (subgraph(&graph, [0]), 20.0),
             (subgraph(&graph, [1]), 30.0),
             (subgraph(&graph, [2]), 25.0),
@@ -181,15 +219,277 @@ mod tests {
             (subgraph(&graph, [1, 2, 3]), 70.0),
             (subgraph(&graph, [0, 1, 2, 3]), 80.0),
         ];
-        let expected = HashSet::from_iter(costs.iter().map(|(s, _)| s.clone()));
-        assert_eq!(convex_subgraphs, expected);
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(selected, HashSet::from([subgraph(&graph, [0, 1, 2, 3])]));
+    }
 
-        let selected_subgraphs = optimize_execution_plan(&graph, &costs);
-        dbg!(
-            selected_subgraphs
-                .iter()
-                .map(|s| s.nodes())
-                .collect::<Vec<_>>()
+    // TC6 — chain p0->p1->p2, tail fusion: {p0}+{p1,p2}=75 optimal
+    #[test]
+    fn chain3_tail_fusion() {
+        let graph = graph_from_edges(3, &[(0, 1), (1, 2)]);
+        let costs = [
+            (subgraph(&graph, [0]), 20.0),
+            (subgraph(&graph, [1]), 30.0),
+            (subgraph(&graph, [2]), 40.0),
+            (subgraph(&graph, [0, 1]), 50.0),
+            (subgraph(&graph, [1, 2]), 55.0),
+            (subgraph(&graph, [0, 1, 2]), 100.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([subgraph(&graph, [0]), subgraph(&graph, [1, 2])])
+        );
+    }
+
+    // TC7 — fan-out p0->{p1,p2}, partial fusion: {p0,p1}+{p2}=65 optimal
+    // {p1,p2} disconnected → excluded.
+    #[test]
+    fn fanout2_partial_fusion() {
+        let graph = graph_from_edges(3, &[(0, 1), (0, 2)]);
+        let costs = [
+            (subgraph(&graph, [0]), 40.0),
+            (subgraph(&graph, [1]), 30.0),
+            (subgraph(&graph, [2]), 25.0),
+            (subgraph(&graph, [0, 1]), 40.0),
+            (subgraph(&graph, [0, 2]), 35.0),
+            (subgraph(&graph, [0, 1, 2]), 90.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([subgraph(&graph, [0, 1]), subgraph(&graph, [2])])
+        );
+    }
+
+    // TC8 — 5-node chain, {p0,p1}+{p2,p3}+{p4}=140 optimal
+    #[test]
+    fn chain5_partial_fusion() {
+        let graph = graph_from_edges(5, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
+        let costs = [
+            (subgraph(&graph, [0]), 40.0),
+            (subgraph(&graph, [1]), 40.0),
+            (subgraph(&graph, [2]), 40.0),
+            (subgraph(&graph, [3]), 40.0),
+            (subgraph(&graph, [4]), 30.0),
+            (subgraph(&graph, [0, 1]), 50.0),
+            (subgraph(&graph, [1, 2]), 70.0),
+            (subgraph(&graph, [2, 3]), 60.0),
+            (subgraph(&graph, [3, 4]), 65.0),
+            (subgraph(&graph, [0, 1, 2]), 100.0),
+            (subgraph(&graph, [1, 2, 3]), 110.0),
+            (subgraph(&graph, [2, 3, 4]), 105.0),
+            (subgraph(&graph, [0, 1, 2, 3]), 150.0),
+            (subgraph(&graph, [1, 2, 3, 4]), 155.0),
+            (subgraph(&graph, [0, 1, 2, 3, 4]), 200.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([
+                subgraph(&graph, [0, 1]),
+                subgraph(&graph, [2, 3]),
+                subgraph(&graph, [4]),
+            ])
+        );
+    }
+
+    // TC9 — fan-out p0->{p1,p2}, singletons=55 optimal
+    #[test]
+    fn fanout2_singletons_win() {
+        let graph = graph_from_edges(3, &[(0, 1), (0, 2)]);
+        let costs = [
+            (subgraph(&graph, [0]), 10.0),
+            (subgraph(&graph, [1]), 20.0),
+            (subgraph(&graph, [2]), 25.0),
+            (subgraph(&graph, [0, 1]), 80.0),
+            (subgraph(&graph, [0, 2]), 85.0),
+            (subgraph(&graph, [0, 1, 2]), 150.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([
+                subgraph(&graph, [0]),
+                subgraph(&graph, [1]),
+                subgraph(&graph, [2]),
+            ])
+        );
+    }
+
+    // TC10 — 6-node chain, three-pair fusion=320 optimal
+    #[test]
+    fn chain6_three_pair_fusion() {
+        let graph = graph_from_edges(6, &[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]);
+        let costs = [
+            (subgraph(&graph, [0]), 60.0),
+            (subgraph(&graph, [1]), 80.0),
+            (subgraph(&graph, [2]), 50.0),
+            (subgraph(&graph, [3]), 70.0),
+            (subgraph(&graph, [4]), 80.0),
+            (subgraph(&graph, [5]), 60.0),
+            (subgraph(&graph, [0, 1]), 110.0),
+            (subgraph(&graph, [1, 2]), 115.0),
+            (subgraph(&graph, [2, 3]), 90.0),
+            (subgraph(&graph, [3, 4]), 130.0),
+            (subgraph(&graph, [4, 5]), 120.0),
+            (subgraph(&graph, [0, 1, 2]), 160.0),
+            (subgraph(&graph, [1, 2, 3]), 200.0),
+            (subgraph(&graph, [2, 3, 4]), 210.0),
+            (subgraph(&graph, [3, 4, 5]), 220.0),
+            (subgraph(&graph, [0, 1, 2, 3]), 260.0),
+            (subgraph(&graph, [1, 2, 3, 4]), 300.0),
+            (subgraph(&graph, [2, 3, 4, 5]), 310.0),
+            (subgraph(&graph, [0, 1, 2, 3, 4]), 330.0),
+            (subgraph(&graph, [1, 2, 3, 4, 5]), 340.0),
+            (subgraph(&graph, [0, 1, 2, 3, 4, 5]), 350.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([
+                subgraph(&graph, [0, 1]),
+                subgraph(&graph, [2, 3]),
+                subgraph(&graph, [4, 5]),
+            ])
+        );
+    }
+
+    // TC11 — merge {p0,p1}->p2->p3, full fusion=90 optimal
+    // {p0,p1} disconnected → excluded.
+    #[test]
+    fn merge_full_fusion() {
+        let graph = graph_from_edges(4, &[(0, 2), (1, 2), (2, 3)]);
+        let convex = extract_convex_subgraphs(&graph);
+        let expected_convex = HashSet::from([
+            subgraph(&graph, [0]),
+            subgraph(&graph, [1]),
+            subgraph(&graph, [2]),
+            subgraph(&graph, [3]),
+            subgraph(&graph, [0, 2]),
+            subgraph(&graph, [1, 2]),
+            subgraph(&graph, [2, 3]),
+            subgraph(&graph, [0, 1, 2]),
+            subgraph(&graph, [0, 2, 3]),
+            subgraph(&graph, [1, 2, 3]),
+            subgraph(&graph, [0, 1, 2, 3]),
+        ]);
+        assert_eq!(convex, expected_convex);
+
+        let costs = [
+            (subgraph(&graph, [0]), 20.0),
+            (subgraph(&graph, [1]), 15.0),
+            (subgraph(&graph, [2]), 40.0),
+            (subgraph(&graph, [3]), 35.0),
+            (subgraph(&graph, [0, 2]), 55.0),
+            (subgraph(&graph, [1, 2]), 50.0),
+            (subgraph(&graph, [2, 3]), 65.0),
+            (subgraph(&graph, [0, 1, 2]), 72.0),
+            (subgraph(&graph, [0, 2, 3]), 82.0),
+            (subgraph(&graph, [1, 2, 3]), 78.0),
+            (subgraph(&graph, [0, 1, 2, 3]), 90.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(selected, HashSet::from([subgraph(&graph, [0, 1, 2, 3])]));
+    }
+
+    // TC12 — chain p0->p1, tie: fused=100 equals singles 50+50=100 (cost only)
+    #[test]
+    fn tie_equal_cost() {
+        let graph = graph_from_edges(2, &[(0, 1)]);
+        let costs = [
+            (subgraph(&graph, [0]), 50.0),
+            (subgraph(&graph, [1]), 50.0),
+            (subgraph(&graph, [0, 1]), 100.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+    }
+
+    // TC13 — chain p0->p1->p2->p3, middle fusion: {p0}+{p1,p2}+{p3}=80
+    #[test]
+    fn chain4_middle_fusion() {
+        let graph = graph_from_edges(4, &[(0, 1), (1, 2), (2, 3)]);
+        let costs = [
+            (subgraph(&graph, [0]), 15.0),
+            (subgraph(&graph, [1]), 40.0),
+            (subgraph(&graph, [2]), 35.0),
+            (subgraph(&graph, [3]), 20.0),
+            (subgraph(&graph, [0, 1]), 50.0),
+            (subgraph(&graph, [1, 2]), 45.0),
+            (subgraph(&graph, [2, 3]), 55.0),
+            (subgraph(&graph, [0, 1, 2]), 90.0),
+            (subgraph(&graph, [1, 2, 3]), 88.0),
+            (subgraph(&graph, [0, 1, 2, 3]), 120.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([
+                subgraph(&graph, [0]),
+                subgraph(&graph, [1, 2]),
+                subgraph(&graph, [3]),
+            ])
+        );
+    }
+
+    // TC14 — chain p0->p1->p2->p3, head fusion: {p0,p1,p2}+{p3}=80
+    #[test]
+    fn chain4_head_fusion() {
+        let graph = graph_from_edges(4, &[(0, 1), (1, 2), (2, 3)]);
+        let costs = [
+            (subgraph(&graph, [0]), 30.0),
+            (subgraph(&graph, [1]), 28.0),
+            (subgraph(&graph, [2]), 26.0),
+            (subgraph(&graph, [3]), 25.0),
+            (subgraph(&graph, [0, 1]), 52.0),
+            (subgraph(&graph, [1, 2]), 50.0),
+            (subgraph(&graph, [2, 3]), 48.0),
+            (subgraph(&graph, [0, 1, 2]), 55.0),
+            (subgraph(&graph, [1, 2, 3]), 75.0),
+            (subgraph(&graph, [0, 1, 2, 3]), 95.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([subgraph(&graph, [0, 1, 2]), subgraph(&graph, [3])])
+        );
+    }
+
+    // TC15 — fan-out recomputation: {p0,p1}+{p0,p2}=58, p0 recomputed
+    #[test]
+    fn fanout_recompute() {
+        let graph = graph_from_edges(3, &[(0, 1), (0, 2)]);
+        let costs = [
+            (subgraph(&graph, [0]), 50.0),
+            (subgraph(&graph, [1]), 40.0),
+            (subgraph(&graph, [2]), 35.0),
+            (subgraph(&graph, [0, 1]), 30.0),
+            (subgraph(&graph, [0, 2]), 28.0),
+            (subgraph(&graph, [0, 1, 2]), 80.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([subgraph(&graph, [0, 1]), subgraph(&graph, [0, 2])])
+        );
+    }
+
+    // TC16 — chain recomputation: {p0,p1}+{p1,p2}=67, p1 recomputed
+    #[test]
+    fn chain_recompute() {
+        let graph = graph_from_edges(3, &[(0, 1), (1, 2)]);
+        let costs = [
+            (subgraph(&graph, [0]), 40.0),
+            (subgraph(&graph, [1]), 50.0),
+            (subgraph(&graph, [2]), 40.0),
+            (subgraph(&graph, [0, 1]), 35.0),
+            (subgraph(&graph, [1, 2]), 32.0),
+            (subgraph(&graph, [0, 1, 2]), 80.0),
+        ];
+        let selected = optimize_execution_plan(&graph, &costs);
+        assert_eq!(
+            selected,
+            HashSet::from([subgraph(&graph, [0, 1]), subgraph(&graph, [1, 2])])
         );
     }
 }
