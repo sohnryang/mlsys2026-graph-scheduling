@@ -1,4 +1,11 @@
-use std::{collections::HashSet, iter};
+use std::{
+    collections::{HashMap, HashSet},
+    iter,
+};
+
+use good_lp::{
+    Expression, Solution, SolverModel, constraint, solvers::scip::scip, variable, variables,
+};
 
 use crate::graph::{ComputationGraph, Subgraph};
 
@@ -45,6 +52,73 @@ pub fn extract_convex_subgraphs(graph: &ComputationGraph) -> HashSet<Subgraph<'_
         }
     }
     convex_subgraphs
+}
+
+pub fn optimize_execution_plan<'a>(
+    graph: &'a ComputationGraph,
+    costs: &[(Subgraph<'a>, f64)],
+) -> HashSet<Subgraph<'a>> {
+    let mut vars = variables!();
+    let u_vars = (0..costs.len())
+        .map(|_| vars.add(variable().binary()))
+        .collect::<Vec<_>>();
+    let objective = u_vars
+        .iter()
+        .zip(costs.iter().map(|c| c.1))
+        .map(|(&u, c)| c * u)
+        .sum::<Expression>();
+    let mut model = vars.minimise(objective).using(scip);
+
+    let mut operation_to_subgraph_indices = HashMap::new();
+    for (i, (subgraph, _)) in costs.iter().enumerate() {
+        for node in subgraph
+            .input_tensor_ids()
+            .iter()
+            .filter_map(|&tensor_id| graph.producer_id_of(tensor_id))
+        {
+            operation_to_subgraph_indices
+                .entry(node)
+                .or_insert(vec![])
+                .push(i);
+        }
+    }
+
+    for operation_id in graph.topological_sort() {
+        let operation_cover_count = u_vars
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &u)| {
+                if costs[i].0.contains(operation_id) {
+                    Some(Expression::from(u))
+                } else {
+                    None
+                }
+            })
+            .sum::<Expression>();
+        model = operation_to_subgraph_indices
+            .get(&operation_id)
+            .unwrap_or(&vec![])
+            .iter()
+            .fold(model, |model, &subgraph_idx| {
+                model.with(constraint!(
+                    operation_cover_count.clone() >= u_vars[subgraph_idx]
+                ))
+            });
+        model = model.with(constraint!(operation_cover_count >= 1));
+    }
+
+    let solution = model.solve().unwrap();
+    u_vars
+        .iter()
+        .zip(costs)
+        .filter_map(|(&u, (subgraph, _))| {
+            if solution.value(u) > 0.5 {
+                Some(subgraph.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<HashSet<_>>()
 }
 
 #[cfg(test)]
