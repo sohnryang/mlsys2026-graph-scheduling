@@ -127,47 +127,27 @@ mod tests {
 
     use super::extract_convex_subgraphs;
     use crate::{
-        graph::{ComputationGraph, OperationId, OperationType, Subgraph, TensorId},
-        input_format::{DeviceParameters, InputFormat},
+        graph::{ComputationGraph, OperationId, Subgraph, TensorId},
+        schedule::optimize_execution_plan,
+        testutil::make_input,
     };
-
-    fn make_input(
-        inputs: Vec<Vec<TensorId>>,
-        outputs: Vec<Vec<TensorId>>,
-        num_tensors: usize,
-    ) -> InputFormat {
-        let num_ops = inputs.len();
-        InputFormat {
-            widths: vec![1; num_tensors],
-            heights: vec![1; num_tensors],
-            inputs,
-            outputs,
-            base_costs: vec![1; num_ops],
-            op_types: vec![OperationType::Pointwise; num_ops],
-            device_parameters: DeviceParameters {
-                fast_memory_capacity: 1,
-                slow_memory_bandwidth: 1,
-                native_granularity: (1, 1),
-            },
-        }
-    }
 
     //              /--t1--> [op1] --t3--\
     // t0 --> [op0]                       +--> [op3] --t5-->
     //              \--t2--> [op2] --t4--/
     //
-    // convex subgraphs: {
-    //   {op0},
-    //   {op1},
-    //   {op2},
-    //   {op3},
-    //   {op0, op1},
-    //   {op0, op2},
-    //   {op1, op3},
-    //   {op2, op3},
-    //   {op0, op1, op2},
-    //   {op1, op2, op3},
-    //   {op0, op1, op2, op3},
+    // convex subgraphs and costs: {
+    //   {op0} -> 20,
+    //   {op1} -> 30,
+    //   {op2} -> 25,
+    //   {op3} -> 40,
+    //   {op0, op1} -> 45,
+    //   {op0, op2} -> 42,
+    //   {op1, op3} -> 55,
+    //   {op2, op3} -> 52,
+    //   {op0, op1, op2} -> 65,
+    //   {op1, op2, op3} -> 70,
+    //   {op0, op1, op2, op3} -> 80,
     // }
     #[test]
     fn skip_connection_convex_subgraphs() {
@@ -188,27 +168,57 @@ mod tests {
         );
         let graph = ComputationGraph::new(&input);
         let convex_subgraphs = extract_convex_subgraphs(&graph);
-        let expected = HashSet::from([
-            Subgraph::from_nodes(&graph, [OperationId(0)]),
-            Subgraph::from_nodes(&graph, [OperationId(1)]),
-            Subgraph::from_nodes(&graph, [OperationId(2)]),
-            Subgraph::from_nodes(&graph, [OperationId(3)]),
-            Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]),
-            Subgraph::from_nodes(&graph, [OperationId(0), OperationId(2)]),
-            Subgraph::from_nodes(&graph, [OperationId(1), OperationId(3)]),
-            Subgraph::from_nodes(&graph, [OperationId(2), OperationId(3)]),
-            Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]),
-            Subgraph::from_nodes(&graph, [OperationId(1), OperationId(2), OperationId(3)]),
-            Subgraph::from_nodes(
-                &graph,
-                [
-                    OperationId(0),
-                    OperationId(1),
-                    OperationId(2),
-                    OperationId(3),
-                ],
+        let costs: [(_, f64); _] = [
+            (Subgraph::from_nodes(&graph, [OperationId(0)]), 20.0),
+            (Subgraph::from_nodes(&graph, [OperationId(1)]), 30.0),
+            (Subgraph::from_nodes(&graph, [OperationId(2)]), 25.0),
+            (Subgraph::from_nodes(&graph, [OperationId(3)]), 40.0),
+            (
+                Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1)]),
+                45.0,
             ),
-        ]);
+            (
+                Subgraph::from_nodes(&graph, [OperationId(0), OperationId(2)]),
+                42.0,
+            ),
+            (
+                Subgraph::from_nodes(&graph, [OperationId(1), OperationId(3)]),
+                55.0,
+            ),
+            (
+                Subgraph::from_nodes(&graph, [OperationId(2), OperationId(3)]),
+                52.0,
+            ),
+            (
+                Subgraph::from_nodes(&graph, [OperationId(0), OperationId(1), OperationId(2)]),
+                65.0,
+            ),
+            (
+                Subgraph::from_nodes(&graph, [OperationId(1), OperationId(2), OperationId(3)]),
+                70.0,
+            ),
+            (
+                Subgraph::from_nodes(
+                    &graph,
+                    [
+                        OperationId(0),
+                        OperationId(1),
+                        OperationId(2),
+                        OperationId(3),
+                    ],
+                ),
+                80.0,
+            ),
+        ];
+        let expected = HashSet::from_iter(costs.iter().map(|(s, _)| s.clone()));
         assert_eq!(convex_subgraphs, expected);
+
+        let selected_subgraphs = optimize_execution_plan(&graph, &costs);
+        dbg!(
+            selected_subgraphs
+                .iter()
+                .map(|s| s.nodes())
+                .collect::<Vec<_>>()
+        );
     }
 }

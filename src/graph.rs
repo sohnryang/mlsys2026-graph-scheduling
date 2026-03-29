@@ -496,29 +496,8 @@ impl std::hash::Hash for Subgraph<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ComputationGraph, OperationId, OperationType, Subgraph, TensorId};
-    use crate::input_format::{DeviceParameters, InputFormat};
-
-    fn make_input(
-        inputs: Vec<Vec<TensorId>>,
-        outputs: Vec<Vec<TensorId>>,
-        num_tensors: usize,
-    ) -> InputFormat {
-        let num_ops = inputs.len();
-        InputFormat {
-            widths: vec![1; num_tensors],
-            heights: vec![1; num_tensors],
-            inputs,
-            outputs,
-            base_costs: vec![1; num_ops],
-            op_types: vec![OperationType::Pointwise; num_ops],
-            device_parameters: DeviceParameters {
-                fast_memory_capacity: 1,
-                slow_memory_bandwidth: 1,
-                native_granularity: (1, 1),
-            },
-        }
-    }
+    use super::{ComputationGraph, OperationId, Subgraph, TensorId};
+    use crate::testutil::make_input;
 
     fn assert_is_topological_order(graph: &ComputationGraph, order: &[OperationId]) {
         let num_ops = graph.operations.len();
