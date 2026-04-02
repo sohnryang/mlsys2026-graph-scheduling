@@ -231,6 +231,7 @@ pub fn propagate_tile_shape(
 pub fn search_tile_values(
     subgraph: &Subgraph<'_>,
     device_params: &DeviceParameters,
+    reserved_fast_memory: i64,
 ) -> Result<(i64, i64, i64), SearchError> {
     let subgraph_output_ids = subgraph.output_tensor_ids();
     let mut per_output_shapes = HashMap::new();
@@ -344,7 +345,7 @@ pub fn search_tile_values(
             let output_footprint = m * n * subgraph_output_ids.len() as i64;
             // Footprint is monotonically non-decreasing in k, so binary-search
             // for the largest k that fits in fast memory.
-            let capacity = device_params.fast_memory_capacity;
+            let capacity = device_params.fast_memory_capacity - reserved_fast_memory;
             let mut lo = k_start;
             let mut hi = k_end + 1;
             while lo < hi {
@@ -1021,7 +1022,7 @@ mod tests {
         let graph = ComputationGraph::new(&input);
         let subgraph = subgraph(&graph, [0, 1]);
 
-        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters).unwrap();
+        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters, 0).unwrap();
         assert_eq!((m, n, k), (128, 128, 1));
     }
 
@@ -1037,7 +1038,7 @@ mod tests {
         let graph = ComputationGraph::new(&input);
         let subgraph = subgraph(&graph, [0, 1]);
 
-        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters).unwrap();
+        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters, 0).unwrap();
         assert_eq!((m, n, k), (128, 128, 1));
     }
 
@@ -1056,7 +1057,7 @@ mod tests {
         let graph = ComputationGraph::new(&input);
         let subgraph = subgraph(&graph, [0, 1]);
 
-        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters).unwrap();
+        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters, 0).unwrap();
         assert_eq!((m, n, k), (128, 128, 43));
     }
 
@@ -1082,7 +1083,7 @@ mod tests {
         });
         let subgraph = subgraph(&graph, [0, 1]);
 
-        let (m, n, k) = search_tile_values(&subgraph, &device_params).unwrap();
+        let (m, n, k) = search_tile_values(&subgraph, &device_params, 0).unwrap();
         assert_eq!((m, n, k), (64, 128, 52));
     }
 }
