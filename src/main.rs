@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+pub mod global_optimization;
 pub mod graph;
 pub mod input_format;
-pub mod schedule;
 pub mod tiling;
 use crate::input_format::InputFormat;
 

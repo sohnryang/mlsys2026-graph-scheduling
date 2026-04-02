@@ -127,7 +127,7 @@ mod tests {
 
     use super::extract_convex_subgraphs;
     use crate::{
-        schedule::optimize_execution_plan,
+        global_optimization::optimize_execution_plan,
         testutil::{graph_from_edges, subgraph},
     };
 
