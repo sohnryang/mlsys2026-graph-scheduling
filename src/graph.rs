@@ -338,7 +338,7 @@ impl<'a> Subgraph<'a> {
         Self { parent, nodes }
     }
 
-    pub fn parent(&self) -> &ComputationGraph {
+    pub fn parent(&self) -> &'a ComputationGraph {
         self.parent
     }
 
