@@ -21,6 +21,12 @@ pub struct Tensor {
     pub height: i64,
 }
 
+impl Tensor {
+    pub fn size(&self) -> i64 {
+        self.width * self.height
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct OperationId(pub usize);
 
