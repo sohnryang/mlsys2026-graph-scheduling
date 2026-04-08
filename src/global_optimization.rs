@@ -69,42 +69,71 @@ pub fn optimize_execution_plan<'a>(
         .sum::<Expression>();
     let mut model = vars.minimise(objective).using(scip);
 
-    let mut operation_to_subgraph_indices = HashMap::new();
+    let mut subgraph_consumers_of_operation_outputs = HashMap::new();
     for (i, (subgraph, _)) in costs.iter().enumerate() {
         for node in subgraph
             .input_tensor_ids()
             .iter()
             .filter_map(|&tensor_id| graph.producer_id_of(tensor_id))
         {
-            operation_to_subgraph_indices
+            subgraph_consumers_of_operation_outputs
                 .entry(node)
                 .or_insert(vec![])
                 .push(i);
         }
     }
 
+    let output_producers_of_subgraph = costs
+        .iter()
+        .map(|(subgraph, _)| {
+            subgraph
+                .output_tensor_ids()
+                .iter()
+                .filter_map(|&tensor_id| graph.producer_id_of(tensor_id))
+                .collect::<HashSet<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let graph_output_producers = Subgraph::from_nodes(graph, graph.topological_sort())
+        .output_tensor_ids()
+        .iter()
+        .filter_map(|&tensor_id| graph.producer_id_of(tensor_id))
+        .collect::<HashSet<_>>();
     for operation_id in graph.topological_sort() {
-        let operation_cover_count = u_vars
+        let operation_executed_as_output = u_vars
             .iter()
             .enumerate()
             .filter_map(|(i, &u)| {
-                if costs[i].0.contains(operation_id) {
+                if output_producers_of_subgraph[i].contains(&operation_id) {
                     Some(Expression::from(u))
                 } else {
                     None
                 }
             })
             .sum::<Expression>();
-        model = operation_to_subgraph_indices
+        model = subgraph_consumers_of_operation_outputs
             .get(&operation_id)
             .unwrap_or(&vec![])
             .iter()
             .fold(model, |model, &subgraph_idx| {
                 model.with(constraint!(
-                    operation_cover_count.clone() >= u_vars[subgraph_idx]
+                    operation_executed_as_output.clone() >= u_vars[subgraph_idx]
                 ))
             });
-        model = model.with(constraint!(operation_cover_count >= 1));
+        if graph_output_producers.contains(&operation_id) {
+            let operation_cover_count = u_vars
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &u)| {
+                    if costs[i].0.contains(operation_id) {
+                        Some(Expression::from(u))
+                    } else {
+                        None
+                    }
+                })
+                .sum::<Expression>();
+            model = model.with(constraint!(operation_cover_count >= 1));
+        }
     }
 
     let solution = model.solve().unwrap();
@@ -516,7 +545,7 @@ mod tests {
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
             selected,
-            HashSet::from([subgraph(&graph, [0, 1]), subgraph(&graph, [1, 2])])
+            HashSet::from([subgraph(&graph, [0]), subgraph(&graph, [1, 2])])
         );
     }
 
