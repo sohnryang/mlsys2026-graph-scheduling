@@ -1122,4 +1122,33 @@ mod tests {
 
         assert_eq!(a.subtract(&b).nodes(), &[OperationId(0)]);
     }
+
+    // t0 ---+--> [op0] --> t2 --+---> [op1] --> t4
+    // t1 --/                     \
+    //                             +--> [op2] --> t5
+    //                       t3 --/
+    // output tensor ids of subgraph {op0, op1} : {t2, t4}
+    #[test]
+    fn output_tensors_of_branching_subgraph() {
+        let input = make_input(
+            vec![
+                vec![TensorId(0), TensorId(1)], // op0 inputs
+                vec![TensorId(2)],              // op1 inputs
+                vec![TensorId(2), TensorId(3)], // op2 inputs
+            ],
+            vec![
+                vec![TensorId(2)], // op0 outputs
+                vec![TensorId(4)], // op1 outputs
+                vec![TensorId(5)], // op2 outputs
+            ],
+            6,
+        );
+        let graph = ComputationGraph::new(&input);
+        let sg = subgraph(&graph, [0, 1]);
+
+        let output_tensors = sg.output_tensor_ids();
+        assert_eq!(output_tensors.len(), 2);
+        assert!(output_tensors.contains(&TensorId(2)));
+        assert!(output_tensors.contains(&TensorId(4)));
+    }
 }
