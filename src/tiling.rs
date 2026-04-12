@@ -231,11 +231,21 @@ pub fn propagate_tile_shape(
 pub fn search_tile_values(
     subgraph: &Subgraph<'_>,
     device_params: &DeviceParameters,
-    reserved_fast_memory: i64,
+    retained_tensor_ids: &[TensorId],
 ) -> Result<(i64, i64, i64), SearchError> {
-    let subgraph_output_ids = subgraph.output_tensor_ids();
     let mut per_output_shapes = HashMap::new();
     let mut merged_constraints = ConstraintTracker::new();
+    let retained_tensor_ids = retained_tensor_ids.iter().copied().collect::<HashSet<_>>();
+    let graph = subgraph.parent();
+    let reserved_fast_memory: i64 = retained_tensor_ids
+        .iter()
+        .map(|&tensor_id| graph.tensors()[tensor_id.0].size())
+        .sum();
+    let subgraph_output_ids = subgraph.output_tensor_ids();
+    let reserved_outputs_count = subgraph_output_ids
+        .iter()
+        .filter(|&tensor_id| retained_tensor_ids.contains(tensor_id))
+        .count();
     for &output_id in subgraph_output_ids.iter() {
         let (shapes, constraints) = propagate_tile_shape(subgraph, output_id)?;
         per_output_shapes.insert(output_id, shapes);
@@ -246,9 +256,13 @@ pub fn search_tile_values(
     let input_footprint = |m, n, k| {
         subgraph_output_ids.iter().fold(0, |acc, &output_id| {
             acc + subgraph_input_ids.iter().fold(0, |acc, &input_id| {
-                acc + per_output_shapes[&output_id]
-                    .get(&input_id)
-                    .map_or(0, |shape| shape.occupied_size(m, n, k))
+                acc + if !retained_tensor_ids.contains(&input_id) {
+                    per_output_shapes[&output_id]
+                        .get(&input_id)
+                        .map_or(0, |shape| shape.occupied_size(m, n, k))
+                } else {
+                    0
+                }
             })
         })
     };
@@ -281,9 +295,13 @@ pub fn search_tile_values(
                 * ceil_div(width, n)
                 * ceil_div(reduction_dimension, k)
                 * subgraph_input_ids.iter().fold(0, |acc, &input_id| {
-                    acc + per_output_shapes[&output_id]
-                        .get(&input_id)
-                        .map_or(0, |shape| shape.occupied_size(m, n, k))
+                    acc + if !retained_tensor_ids.contains(&input_id) {
+                        per_output_shapes[&output_id]
+                            .get(&input_id)
+                            .map_or(0, |shape| shape.occupied_size(m, n, k))
+                    } else {
+                        0
+                    }
                 })
         })
     };
@@ -342,7 +360,8 @@ pub fn search_tile_values(
             };
             let k_start = *range_k.start();
             let k_end = *range_k.end();
-            let output_footprint = m * n * subgraph_output_ids.len() as i64;
+            let output_footprint =
+                m * n * (subgraph_output_ids.len() - reserved_outputs_count) as i64;
             // Footprint is monotonically non-decreasing in k, so binary-search
             // for the largest k that fits in fast memory.
             let capacity = device_params.fast_memory_capacity - reserved_fast_memory;
@@ -1022,7 +1041,7 @@ mod tests {
         let graph = ComputationGraph::new(&input);
         let subgraph = subgraph(&graph, [0, 1]);
 
-        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters, 0).unwrap();
+        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters, &[]).unwrap();
         assert_eq!((m, n, k), (128, 128, 1));
     }
 
@@ -1038,7 +1057,7 @@ mod tests {
         let graph = ComputationGraph::new(&input);
         let subgraph = subgraph(&graph, [0, 1]);
 
-        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters, 0).unwrap();
+        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters, &[]).unwrap();
         assert_eq!((m, n, k), (128, 128, 1));
     }
 
@@ -1057,7 +1076,7 @@ mod tests {
         let graph = ComputationGraph::new(&input);
         let subgraph = subgraph(&graph, [0, 1]);
 
-        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters, 0).unwrap();
+        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters, &[]).unwrap();
         assert_eq!((m, n, k), (128, 128, 43));
     }
 
@@ -1083,7 +1102,7 @@ mod tests {
         });
         let subgraph = subgraph(&graph, [0, 1]);
 
-        let (m, n, k) = search_tile_values(&subgraph, &device_params, 0).unwrap();
+        let (m, n, k) = search_tile_values(&subgraph, &device_params, &[]).unwrap();
         assert_eq!((m, n, k), (64, 128, 52));
     }
 }
