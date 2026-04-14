@@ -11,7 +11,7 @@ pub enum OperationType {
     Pointwise,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub struct TensorId(pub usize);
 
 #[derive(Clone, Debug)]
