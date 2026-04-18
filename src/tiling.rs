@@ -5,6 +5,10 @@ use crate::{
     input_format::DeviceParameters,
 };
 
+pub fn ceil_div(x: i64, y: i64) -> i64 {
+    (x + y - 1) / y
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Axis {
     TiledM,
@@ -267,9 +271,6 @@ pub fn search_tile_values(
         })
     };
 
-    fn ceil_div(x: i64, y: i64) -> i64 {
-        (x + y - 1) / y
-    }
     let output_dimensions = subgraph_output_ids
         .iter()
         .map(|&tensor_id| {
