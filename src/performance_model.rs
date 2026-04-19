@@ -289,3 +289,196 @@ pub fn subgraph_latency(
     latencies
 }
 
+#[cfg(test)]
+mod tests {
+    use fraction::Fraction;
+
+    use super::{PerformanceMetric, subgraph_latency};
+    use crate::graph::{ComputationGraph, TensorId};
+    use crate::testutil::{load_input, subgraph};
+
+    fn total_latency(
+        latencies: &std::collections::HashMap<TensorId, Vec<PerformanceMetric>>,
+    ) -> Fraction {
+        latencies
+            .values()
+            .flat_map(|metrics| metrics.iter().map(|metric| metric.latency()))
+            .sum()
+    }
+
+    // Official Example 1, Strategy A: two separate pointwise subgraphs, each
+    // producing its own spill to slow memory. Expected per-op: 32768.
+    #[test]
+    fn example1_strategy_a_sequential() {
+        let input = load_input("official_example1.json");
+        let device = input.device_parameters.clone();
+        let graph: ComputationGraph = input.into();
+
+        let sg0 = subgraph(&graph, [0]);
+        let sg1 = subgraph(&graph, [1]);
+
+        let lat0 = subgraph_latency(&device, &sg0, (128, 128, 1), &[]);
+        let lat1 = subgraph_latency(&device, &sg1, (128, 128, 1), &[]);
+
+        assert_eq!(lat0.len(), 1);
+        assert_eq!(lat1.len(), 1);
+        assert_eq!(total_latency(&lat0), Fraction::new(32768u64, 10u64));
+        assert_eq!(total_latency(&lat1), Fraction::new(32768u64, 10u64));
+        assert_eq!(
+            total_latency(&lat0) + total_latency(&lat1),
+            Fraction::new(65536u64, 10u64)
+        );
+    }
+
+    // Official Example 1, Strategy B: single merged subgraph eliminates the
+    // intermediate spill of Strategy A. Expected total: 3276.8.
+    #[test]
+    fn example1_strategy_b_merged() {
+        let input = load_input("official_example1.json");
+        let device = input.device_parameters.clone();
+        let graph: ComputationGraph = input.into();
+
+        let sg = subgraph(&graph, [0, 1]);
+        let latencies = subgraph_latency(&device, &sg, (128, 128, 1), &[]);
+
+        assert_eq!(latencies.len(), 1);
+        assert_eq!(total_latency(&latencies), Fraction::new(32768u64, 10u64));
+    }
+
+    // Official Example 1, Strategy C: merged subgraph with small (64,64) tiles
+    // pushes the op into compute-bound territory. Expected total: 4400.
+    #[test]
+    fn example1_strategy_c_small_tiles() {
+        let input = load_input("official_example1.json");
+        let device = input.device_parameters.clone();
+        let graph: ComputationGraph = input.into();
+
+        let sg = subgraph(&graph, [0, 1]);
+        let latencies = subgraph_latency(&device, &sg, (64, 64, 1), &[]);
+        dbg!(&latencies);
+
+        assert_eq!(total_latency(&latencies), Fraction::new(44000u64, 10u64));
+    }
+
+    // Official Example 2, Strategy A: 256x256 tensors tiled at 128x128. Four
+    // spatial tiles per op. Expected per-op: 13107.2.
+    #[test]
+    fn example2_strategy_a_sequential() {
+        let input = load_input("official_example2.json");
+        let device = input.device_parameters.clone();
+        let graph: ComputationGraph = input.into();
+
+        let sg0 = subgraph(&graph, [0]);
+        let sg1 = subgraph(&graph, [1]);
+
+        let lat0 = subgraph_latency(&device, &sg0, (128, 128, 1), &[]);
+        let lat1 = subgraph_latency(&device, &sg1, (128, 128, 1), &[]);
+
+        assert_eq!(total_latency(&lat0), Fraction::new(131072u64, 10u64));
+        assert_eq!(total_latency(&lat1), Fraction::new(131072u64, 10u64));
+    }
+
+    // Official Example 2, Strategy B: merging eliminates the intermediate
+    // 256x256 spill. Expected total: 13107.2.
+    #[test]
+    fn example2_strategy_b_merged() {
+        let input = load_input("official_example2.json");
+        let device = input.device_parameters.clone();
+        let graph: ComputationGraph = input.into();
+
+        let sg = subgraph(&graph, [0, 1]);
+        let latencies = subgraph_latency(&device, &sg, (128, 128, 1), &[]);
+
+        assert_eq!(total_latency(&latencies), Fraction::new(131072u64, 10u64));
+    }
+
+    // Retaining the subgraph's output tensor removes its spill traffic.
+    // For Example 1B (merged) with t2 retained, expected total: 1638.4.
+    #[test]
+    fn retained_output_skips_output_traffic() {
+        let input = load_input("official_example1.json");
+        let device = input.device_parameters.clone();
+        let graph: ComputationGraph = input.into();
+
+        let sg = subgraph(&graph, [0, 1]);
+        let latencies = subgraph_latency(&device, &sg, (128, 128, 1), &[TensorId(2)]);
+
+        assert_eq!(total_latency(&latencies), Fraction::new(16384u64, 10u64));
+    }
+
+    // Official Example 3, Strategy A: diamond graph with three separate
+    // pointwise subgraphs. Expected per-op: 3276.8, 3276.8, 4915.2
+    // (total 11468.8).
+    #[test]
+    fn example3_strategy_a_spilling() {
+        let input = load_input("official_example3.json");
+        let device = input.device_parameters.clone();
+        let graph: ComputationGraph = input.into();
+
+        let sg0 = subgraph(&graph, [0]);
+        let sg1 = subgraph(&graph, [1]);
+        let sg2 = subgraph(&graph, [2]);
+
+        let lat0 = subgraph_latency(&device, &sg0, (128, 128, 1), &[]);
+        let lat1 = subgraph_latency(&device, &sg1, (128, 128, 1), &[]);
+        let lat2 = subgraph_latency(&device, &sg2, (128, 128, 1), &[]);
+
+        assert_eq!(total_latency(&lat0), Fraction::new(32768u64, 10u64));
+        assert_eq!(total_latency(&lat1), Fraction::new(32768u64, 10u64));
+        assert_eq!(total_latency(&lat2), Fraction::new(49152u64, 10u64));
+        let total = total_latency(&lat0) + total_latency(&lat1) + total_latency(&lat2);
+        assert_eq!(total, Fraction::new(114688u64, 10u64));
+    }
+
+    // Official Example 3, Strategy C: selective residency. Subgraphs [op0]
+    // (retain t1) and [op1, op2]. Expected: 1638.4 + 3000 = 4638.4.
+    #[test]
+    fn example3_strategy_c_selective_residency() {
+        let input = load_input("official_example3.json");
+        let device = input.device_parameters.clone();
+        let graph: ComputationGraph = input.into();
+
+        let sg_0 = subgraph(&graph, [0]);
+        let sg_12 = subgraph(&graph, [1, 2]);
+
+        let lat_0 = subgraph_latency(&device, &sg_0, (128, 128, 1), &[TensorId(1)]);
+        let lat_12 = subgraph_latency(&device, &sg_12, (128, 128, 1), &[TensorId(1)]);
+
+        assert_eq!(total_latency(&lat_0), Fraction::new(16384u64, 10u64));
+        assert_eq!(total_latency(&lat_12), Fraction::new(30000u64, 10u64));
+        assert_eq!(
+            total_latency(&lat_0) + total_latency(&lat_12),
+            Fraction::new(46384u64, 10u64)
+        );
+    }
+
+    // Official Example 4, Strategy A: single MatMul tiled at (64,64,128) in
+    // raster order. Expected total: 7096.
+    #[test]
+    fn example4_strategy_a_raster() {
+        let input = load_input("official_example4.json");
+        let device = input.device_parameters.clone();
+        let graph: ComputationGraph = input.into();
+
+        let sg = subgraph(&graph, [0]);
+        let latencies = subgraph_latency(&device, &sg, (64, 64, 128), &[]);
+
+        assert_eq!(latencies.len(), 1);
+        assert_eq!(total_latency(&latencies), Fraction::new(70960u64, 10u64));
+    }
+
+    // Official Example 5, Strategy B: chained MatMuls merged into one
+    // subgraph with split-K tiling (128,128,32). Expected total: 6915.2.
+    #[test]
+    fn example5_strategy_b_split_k() {
+        let input = load_input("official_example5.json");
+        let device = input.device_parameters.clone();
+        let graph: ComputationGraph = input.into();
+
+        let sg = subgraph(&graph, [0, 1]);
+        let latencies = subgraph_latency(&device, &sg, (128, 128, 32), &[]);
+
+        assert_eq!(latencies.len(), 1);
+        assert_eq!(total_latency(&latencies), Fraction::new(69152u64, 10u64));
+    }
+}
