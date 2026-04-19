@@ -7,6 +7,8 @@ use clap::Parser;
 pub mod global_optimization;
 pub mod graph;
 pub mod input_format;
+#[cfg(test)]
+pub mod testutil;
 pub mod tiling;
 use crate::input_format::InputFormat;
 
