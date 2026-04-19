@@ -355,7 +355,6 @@ mod tests {
 
         let sg = subgraph(&graph, [0, 1]);
         let latencies = subgraph_latency(&device, &sg, (64, 64, 1), &[]);
-        dbg!(&latencies);
 
         assert_eq!(total_latency(&latencies), Fraction::new(44000u64, 10u64));
     }
