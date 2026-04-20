@@ -3,9 +3,7 @@ use std::{
     iter,
 };
 
-use good_lp::{
-    Expression, Solution, SolverModel, constraint, solvers::scip::scip, variable, variables,
-};
+use good_lp::{Expression, Solution, SolverModel, constraint, highs, variable, variables};
 
 use crate::graph::{ComputationGraph, Subgraph};
 
@@ -67,7 +65,7 @@ pub fn optimize_execution_plan<'a>(
         .zip(costs.iter().map(|c| c.1))
         .map(|(&u, c)| c * u)
         .sum::<Expression>();
-    let mut model = vars.minimise(objective).using(scip);
+    let mut model = vars.minimise(objective).using(highs);
 
     let mut subgraph_consumers_of_operation_outputs = HashMap::new();
     for (i, (subgraph, _)) in costs.iter().enumerate() {
