@@ -1,10 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use bitvec::prelude::*;
-use good_lp::{
-    Expression, Solution, SolverModel, constraint, highs, solvers::highs::HighsParallelType,
-    variable, variables,
-};
+use good_lp::{Expression, Solution, SolverModel, constraint, highs, variable, variables};
 
 use crate::graph::{ComputationGraph, OperationId, Subgraph};
 
