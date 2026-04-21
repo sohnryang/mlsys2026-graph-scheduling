@@ -3,7 +3,10 @@ use std::collections::{HashMap, HashSet};
 use bitvec::prelude::*;
 use good_lp::{Expression, Solution, SolverModel, constraint, highs, variable, variables};
 
-use crate::graph::{ComputationGraph, OperationId, Subgraph};
+use crate::{
+    graph::{ComputationGraph, OperationId, Subgraph},
+    local_optimization::Partition,
+};
 
 type Bits = BitVec<u64, Lsb0>;
 
@@ -137,8 +140,8 @@ fn is_intersection_subset(a: &Bits, b: &Bits, superset: &Bits) -> bool {
 
 pub fn optimize_execution_plan<'a>(
     graph: &'a ComputationGraph,
-    costs: &[(Subgraph<'a>, f64)],
-) -> HashSet<Subgraph<'a>> {
+    costs: &[(Subgraph<'a>, f64, Vec<Partition<'a>>)],
+) -> Vec<(Subgraph<'a>, Vec<Partition<'a>>)> {
     let mut vars = variables!();
     let u_vars = (0..costs.len())
         .map(|_| vars.add(variable().binary()))
@@ -151,7 +154,7 @@ pub fn optimize_execution_plan<'a>(
     let mut model = vars.minimise(objective).using(highs).set_time_limit(10.0);
 
     let mut subgraph_consumers_of_operation_outputs = HashMap::new();
-    for (i, (subgraph, _)) in costs.iter().enumerate() {
+    for (i, (subgraph, _, _)) in costs.iter().enumerate() {
         for node in subgraph
             .input_tensor_ids()
             .iter()
@@ -166,7 +169,7 @@ pub fn optimize_execution_plan<'a>(
 
     let output_producers_of_subgraph = costs
         .iter()
-        .map(|(subgraph, _)| {
+        .map(|(subgraph, _, _)| {
             subgraph
                 .output_tensor_ids()
                 .iter()
@@ -221,14 +224,14 @@ pub fn optimize_execution_plan<'a>(
     u_vars
         .iter()
         .zip(costs)
-        .filter_map(|(&u, (subgraph, _))| {
+        .filter_map(|(&u, (subgraph, _, partitions))| {
             if solution.value(u) > 0.5 {
-                Some(subgraph.clone())
+                Some((subgraph.clone(), partitions.clone()))
             } else {
                 None
             }
         })
-        .collect::<HashSet<_>>()
+        .collect::<Vec<_>>()
 }
 
 #[cfg(test)]
@@ -238,8 +241,28 @@ mod tests {
     use super::extract_convex_subgraphs;
     use crate::{
         global_optimization::optimize_execution_plan,
+        graph::Subgraph,
+        local_optimization::Partition,
         testutil::{graph_from_edges, subgraph},
     };
+
+    fn with_partitions<'a>(
+        costs: Vec<(Subgraph<'a>, f64)>,
+    ) -> Vec<(Subgraph<'a>, f64, Vec<Partition<'a>>)> {
+        costs
+            .into_iter()
+            .map(|(sg, c)| {
+                let p = vec![Partition(sg.clone(), vec![], (-1, -1, -1))];
+                (sg, c, p)
+            })
+            .collect()
+    }
+
+    fn selected_subgraphs<'a>(
+        selected: Vec<(Subgraph<'a>, Vec<Partition<'a>>)>,
+    ) -> HashSet<Subgraph<'a>> {
+        selected.into_iter().map(|(sg, _)| sg).collect()
+    }
 
     // t0 --> [op0] --t1-->
     //
@@ -250,9 +273,12 @@ mod tests {
         let convex = extract_convex_subgraphs(&graph);
         assert_eq!(convex, HashSet::from([subgraph(&graph, [0])]));
 
-        let costs = [(subgraph(&graph, [0]), 100.0)];
+        let costs = with_partitions(vec![(subgraph(&graph, [0]), 100.0)]);
         let selected = optimize_execution_plan(&graph, &costs);
-        assert_eq!(selected, HashSet::from([subgraph(&graph, [0])]));
+        assert_eq!(
+            selected_subgraphs(selected),
+            HashSet::from([subgraph(&graph, [0])])
+        );
     }
 
     // t0 --> [op0] --t2-->    t1 --> [op1] --t3-->
@@ -266,9 +292,12 @@ mod tests {
         let expected = HashSet::from([subgraph(&graph, [0]), subgraph(&graph, [1])]);
         assert_eq!(convex, expected);
 
-        let costs = [(subgraph(&graph, [0]), 50.0), (subgraph(&graph, [1]), 70.0)];
+        let costs = with_partitions(vec![
+            (subgraph(&graph, [0]), 50.0),
+            (subgraph(&graph, [1]), 70.0),
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
-        assert_eq!(selected, expected);
+        assert_eq!(selected_subgraphs(selected), expected);
     }
 
     // t1 --> [op0] --t0--> [op1] --t2-->
@@ -277,13 +306,16 @@ mod tests {
     #[test]
     fn chain2_fusion_wins() {
         let graph = graph_from_edges(2, &[(0, 1)]);
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 80.0),
             (subgraph(&graph, [1]), 60.0),
             (subgraph(&graph, [0, 1]), 100.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
-        assert_eq!(selected, HashSet::from([subgraph(&graph, [0, 1])]));
+        assert_eq!(
+            selected_subgraphs(selected),
+            HashSet::from([subgraph(&graph, [0, 1])])
+        );
     }
 
     // t1 --> [op0] --t0--> [op1] --t2-->
@@ -292,14 +324,14 @@ mod tests {
     #[test]
     fn chain2_singles_win() {
         let graph = graph_from_edges(2, &[(0, 1)]);
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 30.0),
             (subgraph(&graph, [1]), 40.0),
             (subgraph(&graph, [0, 1]), 100.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([subgraph(&graph, [0]), subgraph(&graph, [1])])
         );
     }
@@ -328,7 +360,7 @@ mod tests {
         ]);
         assert_eq!(convex, expected_convex);
 
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 20.0),
             (subgraph(&graph, [1]), 30.0),
             (subgraph(&graph, [2]), 25.0),
@@ -340,9 +372,12 @@ mod tests {
             (subgraph(&graph, [0, 1, 2]), 65.0),
             (subgraph(&graph, [1, 2, 3]), 70.0),
             (subgraph(&graph, [0, 1, 2, 3]), 80.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
-        assert_eq!(selected, HashSet::from([subgraph(&graph, [0, 1, 2, 3])]));
+        assert_eq!(
+            selected_subgraphs(selected),
+            HashSet::from([subgraph(&graph, [0, 1, 2, 3])])
+        );
     }
 
     // t2 --> [op0] --t0--> [op1] --t1--> [op2] --t3-->
@@ -351,17 +386,17 @@ mod tests {
     #[test]
     fn chain3_tail_fusion() {
         let graph = graph_from_edges(3, &[(0, 1), (1, 2)]);
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 20.0),
             (subgraph(&graph, [1]), 30.0),
             (subgraph(&graph, [2]), 40.0),
             (subgraph(&graph, [0, 1]), 50.0),
             (subgraph(&graph, [1, 2]), 55.0),
             (subgraph(&graph, [0, 1, 2]), 100.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([subgraph(&graph, [0]), subgraph(&graph, [1, 2])])
         );
     }
@@ -374,17 +409,17 @@ mod tests {
     #[test]
     fn fanout2_partial_fusion() {
         let graph = graph_from_edges(3, &[(0, 1), (0, 2)]);
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 40.0),
             (subgraph(&graph, [1]), 30.0),
             (subgraph(&graph, [2]), 25.0),
             (subgraph(&graph, [0, 1]), 40.0),
             (subgraph(&graph, [0, 2]), 35.0),
             (subgraph(&graph, [0, 1, 2]), 90.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([subgraph(&graph, [0, 1]), subgraph(&graph, [2])])
         );
     }
@@ -395,7 +430,7 @@ mod tests {
     #[test]
     fn chain5_partial_fusion() {
         let graph = graph_from_edges(5, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 40.0),
             (subgraph(&graph, [1]), 40.0),
             (subgraph(&graph, [2]), 40.0),
@@ -411,10 +446,10 @@ mod tests {
             (subgraph(&graph, [0, 1, 2, 3]), 150.0),
             (subgraph(&graph, [1, 2, 3, 4]), 155.0),
             (subgraph(&graph, [0, 1, 2, 3, 4]), 200.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([
                 subgraph(&graph, [0, 1]),
                 subgraph(&graph, [2, 3]),
@@ -431,17 +466,17 @@ mod tests {
     #[test]
     fn fanout2_singletons_win() {
         let graph = graph_from_edges(3, &[(0, 1), (0, 2)]);
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 10.0),
             (subgraph(&graph, [1]), 20.0),
             (subgraph(&graph, [2]), 25.0),
             (subgraph(&graph, [0, 1]), 80.0),
             (subgraph(&graph, [0, 2]), 85.0),
             (subgraph(&graph, [0, 1, 2]), 150.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([
                 subgraph(&graph, [0]),
                 subgraph(&graph, [1]),
@@ -456,7 +491,7 @@ mod tests {
     #[test]
     fn chain6_three_pair_fusion() {
         let graph = graph_from_edges(6, &[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]);
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 60.0),
             (subgraph(&graph, [1]), 80.0),
             (subgraph(&graph, [2]), 50.0),
@@ -478,10 +513,10 @@ mod tests {
             (subgraph(&graph, [0, 1, 2, 3, 4]), 330.0),
             (subgraph(&graph, [1, 2, 3, 4, 5]), 340.0),
             (subgraph(&graph, [0, 1, 2, 3, 4, 5]), 350.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([
                 subgraph(&graph, [0, 1]),
                 subgraph(&graph, [2, 3]),
@@ -515,7 +550,7 @@ mod tests {
         ]);
         assert_eq!(convex, expected_convex);
 
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 20.0),
             (subgraph(&graph, [1]), 15.0),
             (subgraph(&graph, [2]), 40.0),
@@ -527,9 +562,12 @@ mod tests {
             (subgraph(&graph, [0, 2, 3]), 82.0),
             (subgraph(&graph, [1, 2, 3]), 78.0),
             (subgraph(&graph, [0, 1, 2, 3]), 90.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
-        assert_eq!(selected, HashSet::from([subgraph(&graph, [0, 1, 2, 3])]));
+        assert_eq!(
+            selected_subgraphs(selected),
+            HashSet::from([subgraph(&graph, [0, 1, 2, 3])])
+        );
     }
 
     // t3 --> [op0] --t0--> [op1] --t1--> [op2] --t2--> [op3] --t4-->
@@ -538,7 +576,7 @@ mod tests {
     #[test]
     fn chain4_middle_fusion() {
         let graph = graph_from_edges(4, &[(0, 1), (1, 2), (2, 3)]);
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 15.0),
             (subgraph(&graph, [1]), 40.0),
             (subgraph(&graph, [2]), 35.0),
@@ -549,10 +587,10 @@ mod tests {
             (subgraph(&graph, [0, 1, 2]), 90.0),
             (subgraph(&graph, [1, 2, 3]), 88.0),
             (subgraph(&graph, [0, 1, 2, 3]), 120.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([
                 subgraph(&graph, [0]),
                 subgraph(&graph, [1, 2]),
@@ -567,7 +605,7 @@ mod tests {
     #[test]
     fn chain4_head_fusion() {
         let graph = graph_from_edges(4, &[(0, 1), (1, 2), (2, 3)]);
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 30.0),
             (subgraph(&graph, [1]), 28.0),
             (subgraph(&graph, [2]), 26.0),
@@ -578,10 +616,10 @@ mod tests {
             (subgraph(&graph, [0, 1, 2]), 55.0),
             (subgraph(&graph, [1, 2, 3]), 75.0),
             (subgraph(&graph, [0, 1, 2, 3]), 95.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([subgraph(&graph, [0, 1, 2]), subgraph(&graph, [3])])
         );
     }
@@ -594,17 +632,17 @@ mod tests {
     #[test]
     fn fanout_recompute() {
         let graph = graph_from_edges(3, &[(0, 1), (0, 2)]);
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 50.0),
             (subgraph(&graph, [1]), 40.0),
             (subgraph(&graph, [2]), 35.0),
             (subgraph(&graph, [0, 1]), 30.0),
             (subgraph(&graph, [0, 2]), 28.0),
             (subgraph(&graph, [0, 1, 2]), 80.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([subgraph(&graph, [0, 1]), subgraph(&graph, [0, 2])])
         );
     }
@@ -615,17 +653,17 @@ mod tests {
     #[test]
     fn chain_recompute() {
         let graph = graph_from_edges(3, &[(0, 1), (1, 2)]);
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 40.0),
             (subgraph(&graph, [1]), 50.0),
             (subgraph(&graph, [2]), 40.0),
             (subgraph(&graph, [0, 1]), 35.0),
             (subgraph(&graph, [1, 2]), 32.0),
             (subgraph(&graph, [0, 1, 2]), 80.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([subgraph(&graph, [0]), subgraph(&graph, [1, 2])])
         );
     }
@@ -656,7 +694,7 @@ mod tests {
         ]);
         assert_eq!(convex, expected_convex);
 
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 60.0),
             (subgraph(&graph, [1]), 30.0),
             (subgraph(&graph, [2]), 30.0),
@@ -668,10 +706,10 @@ mod tests {
             (subgraph(&graph, [0, 1, 3]), 80.0),
             (subgraph(&graph, [0, 2, 3]), 80.0),
             (subgraph(&graph, [0, 1, 2, 3]), 100.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([
                 subgraph(&graph, [0, 1]),
                 subgraph(&graph, [0, 2]),
@@ -689,7 +727,7 @@ mod tests {
     #[test]
     fn diamond_tail_partial_fusion() {
         let graph = graph_from_edges(5, &[(0, 1), (0, 2), (1, 3), (2, 3), (3, 4)]);
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 30.0),
             (subgraph(&graph, [1]), 25.0),
             (subgraph(&graph, [2]), 25.0),
@@ -707,10 +745,10 @@ mod tests {
             (subgraph(&graph, [1, 2, 3, 4]), 70.0),
             (subgraph(&graph, [0, 1, 2, 3]), 65.0),
             (subgraph(&graph, [0, 1, 2, 3, 4]), 100.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([subgraph(&graph, [0, 1, 2, 3]), subgraph(&graph, [4])])
         );
     }
@@ -747,7 +785,7 @@ mod tests {
         ]);
         assert_eq!(convex, expected_convex);
 
-        let costs = [
+        let costs = with_partitions(vec![
             (subgraph(&graph, [0]), 40.0),
             (subgraph(&graph, [1]), 35.0),
             (subgraph(&graph, [2]), 30.0),
@@ -765,10 +803,10 @@ mod tests {
             (subgraph(&graph, [0, 1, 2, 4]), 85.0),
             (subgraph(&graph, [0, 1, 3, 4]), 55.0),
             (subgraph(&graph, [0, 1, 2, 3, 4]), 100.0),
-        ];
+        ]);
         let selected = optimize_execution_plan(&graph, &costs);
         assert_eq!(
-            selected,
+            selected_subgraphs(selected),
             HashSet::from([subgraph(&graph, [0, 1, 3, 4]), subgraph(&graph, [2])])
         );
     }
