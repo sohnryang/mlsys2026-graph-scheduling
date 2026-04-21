@@ -27,7 +27,7 @@ impl Tensor {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct OperationId(pub usize);
 
 #[derive(Clone, Debug)]
