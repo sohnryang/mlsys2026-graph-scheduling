@@ -1,5 +1,5 @@
-use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 use serde::Deserialize;
 
@@ -89,7 +89,7 @@ pub struct ComputationGraph {
     outputs: HashMap<OperationId, Vec<TensorId>>,
     producer: HashMap<TensorId, OperationId>,
     consumers: HashMap<TensorId, Vec<OperationId>>,
-    topological_order: OnceCell<TopologicalOrder>,
+    topological_order: OnceLock<TopologicalOrder>,
 }
 
 impl ComputationGraph {
@@ -195,7 +195,7 @@ impl ComputationGraph {
             outputs,
             producer,
             consumers,
-            topological_order: OnceCell::new(),
+            topological_order: OnceLock::new(),
         }
     }
 
