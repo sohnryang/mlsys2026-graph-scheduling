@@ -7,6 +7,7 @@ use clap::Parser;
 pub mod global_optimization;
 pub mod graph;
 pub mod input_format;
+pub mod local_optimization;
 pub mod performance_model;
 #[cfg(test)]
 pub mod testutil;
