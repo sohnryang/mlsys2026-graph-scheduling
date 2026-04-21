@@ -1,11 +1,19 @@
 use std::collections::{HashMap, HashSet};
 
 use bitvec::prelude::*;
-use good_lp::{Expression, Solution, SolverModel, constraint, highs, variable, variables};
+use good_lp::{
+    Expression, Solution, SolverModel, constraint, highs, solvers::highs::HighsParallelType,
+    variable, variables,
+};
 
 use crate::graph::{ComputationGraph, OperationId, Subgraph};
 
 type Bits = BitVec<u64, Lsb0>;
+
+/// Upper bound on the number of ops in any enumerated convex subgraph.
+/// Fusion benefit plateaus once the working set exceeds fast memory, so
+/// candidates much larger than this are rarely selected by the BLP anyway.
+const MAX_FUSION_SIZE: usize = 10;
 
 pub fn extract_convex_subgraphs(graph: &ComputationGraph) -> HashSet<Subgraph<'_>> {
     let topo = graph.topological_sort();
@@ -90,6 +98,10 @@ fn grow<'a>(
         bits.iter_ones().map(|pos| op_at[pos]),
     ));
 
+    if bits.count_ones() >= MAX_FUSION_SIZE {
+        return;
+    }
+
     let mut frontier_bits = bitvec![u64, Lsb0; 0; bits.len()];
     let mut frontier: Vec<usize> = Vec::new();
     for p in bits.iter_ones() {
@@ -139,7 +151,7 @@ pub fn optimize_execution_plan<'a>(
         .zip(costs.iter().map(|c| c.1))
         .map(|(&u, c)| c * u)
         .sum::<Expression>();
-    let mut model = vars.minimise(objective).using(highs);
+    let mut model = vars.minimise(objective).using(highs).set_time_limit(10.0);
 
     let mut subgraph_consumers_of_operation_outputs = HashMap::new();
     for (i, (subgraph, _)) in costs.iter().enumerate() {
