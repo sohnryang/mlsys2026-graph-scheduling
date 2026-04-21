@@ -1,55 +1,129 @@
-use std::{
-    collections::{HashMap, HashSet},
-    iter,
-};
+use std::collections::{HashMap, HashSet};
 
+use bitvec::prelude::*;
 use good_lp::{Expression, Solution, SolverModel, constraint, highs, variable, variables};
 
-use crate::graph::{ComputationGraph, Subgraph};
+use crate::graph::{ComputationGraph, OperationId, Subgraph};
+
+type Bits = BitVec<u64, Lsb0>;
 
 pub fn extract_convex_subgraphs(graph: &ComputationGraph) -> HashSet<Subgraph<'_>> {
-    let mut execution_states = HashSet::from([Subgraph::from_nodes(graph, iter::empty())]);
-    let topological_order = graph.topological_sort();
-    let mut stack = vec![Subgraph::from_nodes(graph, iter::empty())];
-    while let Some(execution_state) = stack.pop() {
-        for &operation_id in topological_order.iter() {
-            if execution_state.contains(operation_id) {
-                continue;
-            }
+    let topo = graph.topological_sort();
+    let n = topo.len();
+    if n == 0 {
+        return HashSet::new();
+    }
 
-            let dependency_satisfied = graph
-                .input_ids_for(operation_id)
-                .iter()
-                .filter_map(|&tensor_id| graph.producer_id_of(tensor_id))
-                .all(|producer_id| execution_state.contains(producer_id));
-            if !dependency_satisfied {
-                continue;
-            }
+    let op_at: Vec<OperationId> = topo.into_iter().collect();
+    let mut position = vec![0usize; n];
+    for (i, op) in op_at.iter().enumerate() {
+        position[op.0] = i;
+    }
 
-            let mut next_executed_subgraph = execution_state.clone();
-            next_executed_subgraph.insert(operation_id);
-            if execution_states.contains(&next_executed_subgraph) {
-                continue;
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for pos in 0..n {
+        let op = op_at[pos];
+        let mut dedup: HashSet<usize> = HashSet::new();
+        for &tensor_id in graph.input_ids_for(op) {
+            if let Some(producer) = graph.producer_id_of(tensor_id) {
+                let pred_pos = position[producer.0];
+                if dedup.insert(pred_pos) {
+                    preds[pos].push(pred_pos);
+                    succs[pred_pos].push(pos);
+                }
             }
-
-            execution_states.insert(next_executed_subgraph.clone());
-            stack.push(next_executed_subgraph);
         }
     }
 
-    let mut convex_subgraphs = HashSet::new();
-    for state0 in execution_states.iter() {
-        for state1 in execution_states.iter() {
-            if !state0.is_subset(state1) {
-                continue;
-            }
-            let convex_subgraph = state1.subtract(state0);
-            if convex_subgraph.components() == 1 {
-                convex_subgraphs.insert(convex_subgraph);
+    let mut anc: Vec<Bits> = (0..n).map(|_| bitvec![u64, Lsb0; 0; n]).collect();
+    for pos in 0..n {
+        anc[pos].set(pos, true);
+        for i in 0..preds[pos].len() {
+            let pp_anc = anc[preds[pos][i]].clone();
+            anc[pos] |= &pp_anc;
+        }
+    }
+    let mut desc: Vec<Bits> = (0..n).map(|_| bitvec![u64, Lsb0; 0; n]).collect();
+    for pos in (0..n).rev() {
+        desc[pos].set(pos, true);
+        for i in 0..succs[pos].len() {
+            let sp_desc = desc[succs[pos][i]].clone();
+            desc[pos] |= &sp_desc;
+        }
+    }
+
+    let mut seen: HashSet<Bits> = HashSet::new();
+    let mut out: HashSet<Subgraph<'_>> = HashSet::new();
+
+    for seed in 0..n {
+        let mut bits = bitvec![u64, Lsb0; 0; n];
+        bits.set(seed, true);
+        let anc_s = anc[seed].clone();
+        let desc_s = desc[seed].clone();
+        grow(
+            graph, &op_at, &preds, &succs, &anc, &desc, bits, anc_s, desc_s, &mut seen, &mut out,
+        );
+    }
+
+    out
+}
+
+fn grow<'a>(
+    graph: &'a ComputationGraph,
+    op_at: &[OperationId],
+    preds: &[Vec<usize>],
+    succs: &[Vec<usize>],
+    anc: &[Bits],
+    desc: &[Bits],
+    bits: Bits,
+    anc_s: Bits,
+    desc_s: Bits,
+    seen: &mut HashSet<Bits>,
+    out: &mut HashSet<Subgraph<'a>>,
+) {
+    if !seen.insert(bits.clone()) {
+        return;
+    }
+    out.insert(Subgraph::from_nodes(
+        graph,
+        bits.iter_ones().map(|pos| op_at[pos]),
+    ));
+
+    let mut frontier_bits = bitvec![u64, Lsb0; 0; bits.len()];
+    let mut frontier: Vec<usize> = Vec::new();
+    for p in bits.iter_ones() {
+        for &q in preds[p].iter().chain(succs[p].iter()) {
+            if !bits[q] && !frontier_bits[q] {
+                frontier_bits.set(q, true);
+                frontier.push(q);
             }
         }
     }
-    convex_subgraphs
+
+    for w in frontier {
+        let mut new_anc = anc_s.clone();
+        new_anc |= &anc[w];
+        let mut new_desc = desc_s.clone();
+        new_desc |= &desc[w];
+        let mut s_plus = bits.clone();
+        s_plus.set(w, true);
+        // Convexity holds iff every node on some path between two members of
+        // S' = S ∪ {w} is itself in S'. Such a node lies in anc(S') ∩ desc(S').
+        if is_intersection_subset(&new_anc, &new_desc, &s_plus) {
+            grow(
+                graph, op_at, preds, succs, anc, desc, s_plus, new_anc, new_desc, seen, out,
+            );
+        }
+    }
+}
+
+fn is_intersection_subset(a: &Bits, b: &Bits, superset: &Bits) -> bool {
+    a.as_raw_slice()
+        .iter()
+        .zip(b.as_raw_slice())
+        .zip(superset.as_raw_slice())
+        .all(|((x, y), s)| (x & y & !s) == 0)
 }
 
 pub fn optimize_execution_plan<'a>(
