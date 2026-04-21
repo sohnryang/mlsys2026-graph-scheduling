@@ -8,6 +8,7 @@ name = "mlsys"
 path = "src/main.rs"
 
 [dependencies]
+bitvec = "1.0.1"
 clap = { version = "4.5.58", features = ["derive"] }
 fraction = "0.15.3"
 good_lp = { version = "1.15.0", features = ["highs"], default-features = false }
