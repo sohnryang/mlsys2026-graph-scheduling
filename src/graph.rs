@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::input_format::InputFormat;
 
@@ -11,7 +11,7 @@ pub enum OperationType {
     Pointwise,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub struct TensorId(pub usize);
 
 #[derive(Clone, Debug)]
@@ -27,7 +27,7 @@ impl Tensor {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct OperationId(pub usize);
 
 #[derive(Clone, Debug)]
