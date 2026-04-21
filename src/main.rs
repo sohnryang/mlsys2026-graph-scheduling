@@ -29,6 +29,8 @@ use crate::tiling::search_tile_values;
 struct Cli {
     input_file: PathBuf,
     output_file: PathBuf,
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 fn main() {
@@ -43,8 +45,10 @@ fn main() {
     let convex_subgraphs = extract_convex_subgraphs(&graph)
         .into_iter()
         .collect::<Vec<_>>();
-    eprintln!("convex subgraph extraction took: {:?}", start.elapsed());
-    eprintln!("discovered {} convex subgraphs", convex_subgraphs.len());
+    if cli.verbose {
+        eprintln!("convex subgraph extraction took: {:?}", start.elapsed());
+        eprintln!("discovered {} convex subgraphs", convex_subgraphs.len());
+    }
     let start = Instant::now();
     let subgraph_costs = convex_subgraphs
         .into_par_iter()
@@ -61,14 +65,18 @@ fn main() {
             ))
         })
         .collect::<Vec<_>>();
-    eprintln!(
-        "subgraph performance cost model took: {:?}",
-        start.elapsed()
-    );
-    eprintln!("subgraph count: {}", subgraph_costs.len());
+    if cli.verbose {
+        eprintln!(
+            "subgraph performance cost model took: {:?}",
+            start.elapsed()
+        );
+        eprintln!("subgraph count: {}", subgraph_costs.len());
+    }
     let start = Instant::now();
     let execution_plan = optimize_execution_plan(&graph, &subgraph_costs);
-    eprintln!("subgraph selection took: {:?}", start.elapsed());
+    if cli.verbose {
+        eprintln!("subgraph selection took: {:?}", start.elapsed());
+    }
 
     let ordered_plan = topological_sort_subgraphs(execution_plan);
     write_output(&cli.output_file, &input.device_parameters, ordered_plan);
