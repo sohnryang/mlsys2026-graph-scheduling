@@ -13,7 +13,7 @@ type Bits = BitVec<u64, Lsb0>;
 /// Upper bound on the number of ops in any enumerated convex subgraph.
 /// Fusion benefit plateaus once the working set exceeds fast memory, so
 /// candidates much larger than this are rarely selected by the BLP anyway.
-const MAX_FUSION_SIZE: usize = 10;
+const MAX_FUSION_SIZE: usize = 8;
 
 pub fn extract_convex_subgraphs(graph: &ComputationGraph) -> HashSet<Subgraph<'_>> {
     let topo = graph.topological_sort();

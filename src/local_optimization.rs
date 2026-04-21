@@ -74,7 +74,7 @@ impl Iterator for RetentionCandidates {
     }
 }
 
-const MAX_STAGE_SIZE: usize = 6;
+const MAX_STAGE_SIZE: usize = 3;
 
 /// Enumerates non-empty connected subsets `S` of `subgraph \ executed` such
 /// that `executed ∪ S` is a downset (closed under predecessors taken within
