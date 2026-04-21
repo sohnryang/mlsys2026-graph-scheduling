@@ -291,6 +291,8 @@ pub fn subgraph_latency(
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use fraction::Fraction;
 
     use super::{PerformanceMetric, subgraph_latency};
@@ -479,5 +481,28 @@ mod tests {
 
         assert_eq!(latencies.len(), 1);
         assert_eq!(total_latency(&latencies), Fraction::new(69152u64, 10u64));
+    }
+
+    #[test]
+    fn example5_unfused() {
+        let input = load_input("official_example5.json");
+        let device = input.device_parameters.clone();
+        let graph: ComputationGraph = input.into();
+
+        let sg0 = subgraph(&graph, [0]);
+        let latencies0 = subgraph_latency(&device, &sg0, (128, 128, 32), &[]);
+        let sg1 = subgraph(&graph, [1]);
+        let latencies1 = subgraph_latency(&device, &sg1, (128, 128, 32), &[]);
+
+        assert_eq!(latencies0.len(), 1);
+        assert_eq!(
+            total_latency(&latencies0),
+            Fraction::from_str("4915.2").unwrap()
+        );
+        assert_eq!(latencies1.len(), 1);
+        assert_eq!(
+            total_latency(&latencies1),
+            Fraction::from_str("4915.2").unwrap()
+        );
     }
 }
