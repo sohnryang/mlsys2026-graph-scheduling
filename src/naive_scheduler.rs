@@ -1,12 +1,12 @@
 use fraction::Fraction;
 
 use crate::{
-    graph::{ComputationGraph, Subgraph},
+    graph::{ComputationGraph, Partition, Subgraph},
     input_format::DeviceParameters,
-    local_optimization::Partition,
     performance_model::subgraph_latency,
     tiling::search_tile_values,
 };
+
 
 /// Schedules each operation independently in topological order using the
 /// largest feasible tile per single-op subgraph and no inter-op retention.
@@ -33,7 +33,11 @@ pub fn naive_schedule<'a>(
             .sum();
         let cost_f64 = f64::try_from(latency).unwrap();
         total_cost += cost_f64;
-        schedule.push(vec![Partition(subgraph, vec![], tile)]);
+        schedule.push(vec![Partition {
+            subgraph,
+            retained_outputs: vec![],
+            tile_size: tile,
+        }]);
     }
 
     (schedule, total_cost)
@@ -42,8 +46,8 @@ pub fn naive_schedule<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::load_input;
     use crate::graph::ComputationGraph;
+    use crate::testutil::load_input;
 
     // t0(128x128) --> [op0(pw, cost=1000)] --> t1(128x128) --> [op1(pw, cost=100)] --> t2(128x128)
     // Device: fast_memory_capacity=35000, slow_memory_bandwidth=10, native_granularity=(128,128)
