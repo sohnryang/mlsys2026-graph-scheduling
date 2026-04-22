@@ -94,7 +94,12 @@ fn write_output(
     let mut subgraph_latencies = Vec::new();
 
     for partitions in ordered_plan {
-        for Partition(sg, retained, tile) in partitions {
+        for Partition {
+            subgraph: sg,
+            retained_outputs: retained,
+            tile_size: tile,
+        } in partitions
+        {
             let metrics = subgraph_latency(device_params, &sg, tile, &retained);
             let latency: Fraction = metrics
                 .values()

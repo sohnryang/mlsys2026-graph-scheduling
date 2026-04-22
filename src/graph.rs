@@ -501,7 +501,11 @@ impl std::hash::Hash for Subgraph<'_> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Partition<'a>(pub Subgraph<'a>, pub Vec<TensorId>, pub (i64, i64, i64));
+pub struct Partition<'a> {
+    pub subgraph: Subgraph<'a>,
+    pub retained_outputs: Vec<TensorId>,
+    pub tile_size: (i64, i64, i64),
+}
 
 #[cfg(test)]
 mod tests {

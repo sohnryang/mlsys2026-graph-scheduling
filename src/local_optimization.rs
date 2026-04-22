@@ -182,11 +182,11 @@ pub fn partition_subgraph<'a>(
 ) -> Option<Vec<(Partition<'a>, Fraction)>> {
     let graph = subgraph.parent();
     let subgraph_outputs = subgraph.output_tensor_ids();
-    let empty_partition = Partition(
-        Subgraph::from_nodes(graph, std::iter::empty()),
-        vec![],
-        (-1, -1, -1),
-    );
+    let empty_partition = Partition {
+        subgraph: Subgraph::from_nodes(graph, std::iter::empty()),
+        retained_outputs: vec![],
+        tile_size: (-1, -1, -1),
+    };
     let mut costs = HashMap::from([(empty_partition.clone(), Fraction::from(0i64))]);
     let mut parents = HashMap::new();
     let mut heap = BinaryHeap::from([State {
@@ -200,7 +200,7 @@ pub fn partition_subgraph<'a>(
         executed_partition,
     }) = heap.pop()
     {
-        if executed_partition.0.nodes() == subgraph.nodes() {
+        if executed_partition.subgraph.nodes() == subgraph.nodes() {
             if latency < best_latency.unwrap_or(i64::MAX.into()) {
                 best_latency = Some(latency);
                 best_partition = Some(executed_partition);
@@ -213,9 +213,9 @@ pub fn partition_subgraph<'a>(
             continue;
         }
 
-        for stage in enum_next_stages(subgraph, &executed_partition.0) {
+        for stage in enum_next_stages(subgraph, &executed_partition.subgraph) {
             // Build new executed subgraph = executed ∪ stage.
-            let mut new_executed = executed_partition.0.clone();
+            let mut new_executed = executed_partition.subgraph.clone();
             for &op in stage.nodes() {
                 new_executed.insert(op);
             }
@@ -235,7 +235,7 @@ pub fn partition_subgraph<'a>(
                 .collect();
 
             let reserved_fast_memory_input: i64 = executed_partition
-                .1
+                .retained_outputs
                 .iter()
                 .map(|&tensor_id| graph.tensors()[tensor_id.0].size())
                 .sum();
@@ -244,8 +244,11 @@ pub fn partition_subgraph<'a>(
                 device_params.fast_memory_capacity,
                 reserved_fast_memory_input,
             ) {
-                let retained_tensor_ids =
-                    [executed_partition.1.clone(), retention.clone()].concat();
+                let retained_tensor_ids = [
+                    executed_partition.retained_outputs.clone(),
+                    retention.clone(),
+                ]
+                .concat();
                 let Ok(tile_size) =
                     search_tile_values(subgraph, device_params, &retained_tensor_ids)
                 else {
@@ -253,7 +256,11 @@ pub fn partition_subgraph<'a>(
                 };
                 let stage_performance_metrics =
                     subgraph_latency(device_params, &stage, tile_size, &retained_tensor_ids);
-                let new_partition = Partition(new_executed.clone(), retention, tile_size);
+                let new_partition = Partition {
+                    subgraph: new_executed.clone(),
+                    retained_outputs: retention,
+                    tile_size,
+                };
                 let new_latency = latency
                     + stage_performance_metrics
                         .values()
@@ -291,7 +298,11 @@ pub fn partition_subgraph<'a>(
         .zip(execution_state_chain[1..execution_state_chain.len()].iter())
         .map(|(after, before)| {
             (
-                Partition(after.0.subtract(&before.0), after.1.clone(), after.2),
+                Partition {
+                    subgraph: after.subgraph.subtract(&before.subgraph),
+                    retained_outputs: after.retained_outputs.clone(),
+                    tile_size: after.tile_size,
+                },
                 costs[after],
             )
         })

@@ -248,7 +248,11 @@ mod tests {
         costs
             .into_iter()
             .map(|(sg, c)| {
-                let p = vec![Partition(sg.clone(), vec![], (-1, -1, -1))];
+                let p = vec![Partition {
+                    subgraph: sg.clone(),
+                    retained_outputs: vec![],
+                    tile_size: (-1, -1, -1),
+                }];
                 (sg, c, p)
             })
             .collect()
