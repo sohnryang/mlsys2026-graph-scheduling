@@ -3,10 +3,7 @@ use std::collections::{HashMap, HashSet};
 use bitvec::prelude::*;
 use good_lp::{Expression, Solution, SolverModel, constraint, highs, variable, variables};
 
-use crate::{
-    graph::{ComputationGraph, OperationId, Subgraph},
-    local_optimization::Partition,
-};
+use crate::graph::{ComputationGraph, OperationId, Partition, Subgraph};
 
 type Bits = BitVec<u64, Lsb0>;
 
@@ -241,8 +238,7 @@ mod tests {
     use super::extract_convex_subgraphs;
     use crate::{
         global_optimization::optimize_execution_plan,
-        graph::Subgraph,
-        local_optimization::Partition,
+        graph::{Partition, Subgraph},
         testutil::{graph_from_edges, subgraph},
     };
 

@@ -500,6 +500,9 @@ impl std::hash::Hash for Subgraph<'_> {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Partition<'a>(pub Subgraph<'a>, pub Vec<TensorId>, pub (i64, i64, i64));
+
 #[cfg(test)]
 mod tests {
     use super::{ComputationGraph, OperationId, TensorId};

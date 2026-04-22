@@ -3,14 +3,11 @@ use std::collections::{BTreeSet, BinaryHeap, HashMap, HashSet};
 use fraction::Fraction;
 
 use crate::{
-    graph::{OperationId, Subgraph, TensorId},
+    graph::{OperationId, Partition, Subgraph, TensorId},
     input_format::DeviceParameters,
     performance_model::subgraph_latency,
     tiling::search_tile_values,
 };
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Partition<'a>(pub Subgraph<'a>, pub Vec<TensorId>, pub (i64, i64, i64));
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct State<'a> {
