@@ -291,6 +291,7 @@ pub fn subgraph_latency(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::str::FromStr;
 
     use fraction::Fraction;
@@ -299,9 +300,7 @@ mod tests {
     use crate::graph::{ComputationGraph, TensorId};
     use crate::testutil::{load_input, subgraph};
 
-    fn total_latency(
-        latencies: &std::collections::HashMap<TensorId, Vec<PerformanceMetric>>,
-    ) -> Fraction {
+    fn total_latency(latencies: &HashMap<TensorId, Vec<PerformanceMetric>>) -> Fraction {
         latencies
             .values()
             .flat_map(|metrics| metrics.iter().map(|metric| metric.latency()))
