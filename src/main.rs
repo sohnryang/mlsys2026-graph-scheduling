@@ -12,6 +12,7 @@ pub mod global_optimization;
 pub mod graph;
 pub mod input_format;
 pub mod local_optimization;
+pub mod naive_scheduler;
 pub mod output_format;
 pub mod performance_model;
 #[cfg(test)]
@@ -21,6 +22,7 @@ use crate::global_optimization::{extract_convex_subgraphs, optimize_execution_pl
 use crate::graph::{ComputationGraph, Partition, Subgraph, TensorId};
 use crate::input_format::{DeviceParameters, InputFormat};
 use crate::local_optimization::partition_subgraph;
+use crate::naive_scheduler::naive_schedule;
 use crate::output_format::OutputFormat;
 use crate::performance_model::subgraph_latency;
 use crate::tiling::search_tile_values;
@@ -31,6 +33,9 @@ struct Cli {
     output_file: PathBuf,
     #[arg(short, long)]
     verbose: bool,
+    /// Run the naive single-op baseline and print a latency comparison to stderr.
+    #[arg(long)]
+    compare_naive: bool,
 }
 
 fn main() {
@@ -79,14 +84,26 @@ fn main() {
     }
 
     let ordered_plan = topological_sort_subgraphs(execution_plan);
-    write_output(&cli.output_file, &input.device_parameters, ordered_plan);
+    let optimized_total = write_output(&cli.output_file, &input.device_parameters, ordered_plan);
+
+    if cli.compare_naive {
+        let (_, naive_total) = naive_schedule(&graph, &input.device_parameters);
+        eprintln!("Naive total latency:     {:.2}", naive_total);
+        eprintln!("Optimized total latency: {:.2}", optimized_total);
+        if optimized_total > 0.0 {
+            eprintln!(
+                "Speedup:                 {:.2}x",
+                naive_total / optimized_total
+            );
+        }
+    }
 }
 
 fn write_output(
     path: &Path,
     device_params: &DeviceParameters,
     ordered_plan: Vec<Vec<Partition<'_>>>,
-) {
+) -> f64 {
     let mut subgraphs = Vec::new();
     let mut granularities = Vec::new();
     let mut tensors_to_retain = Vec::new();
@@ -113,6 +130,7 @@ fn write_output(
         }
     }
 
+    let total: f64 = subgraph_latencies.iter().sum();
     let output = OutputFormat {
         subgraphs,
         granularities,
@@ -122,6 +140,7 @@ fn write_output(
     };
     let file = File::create(path).expect("failed to create output file");
     serde_json::to_writer(BufWriter::new(file), &output).expect("failed to write output");
+    total
 }
 
 /// Orders selected subgraphs so that if subgraph `B` produces a tensor that
