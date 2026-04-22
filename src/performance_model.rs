@@ -289,23 +289,22 @@ pub fn subgraph_latency(
     latencies
 }
 
+pub fn total_latency(latencies: &HashMap<TensorId, Vec<PerformanceMetric>>) -> Fraction {
+    latencies
+        .values()
+        .flat_map(|metrics| metrics.iter().map(|metric| metric.latency()))
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::str::FromStr;
 
     use fraction::Fraction;
 
-    use super::{PerformanceMetric, subgraph_latency};
+    use super::{subgraph_latency, total_latency};
     use crate::graph::{ComputationGraph, TensorId};
     use crate::testutil::{load_input, subgraph};
-
-    fn total_latency(latencies: &HashMap<TensorId, Vec<PerformanceMetric>>) -> Fraction {
-        latencies
-            .values()
-            .flat_map(|metrics| metrics.iter().map(|metric| metric.latency()))
-            .sum()
-    }
 
     // Official Example 1, Strategy A: two separate pointwise subgraphs, each
     // producing its own spill to slow memory. Expected per-op: 32768.
