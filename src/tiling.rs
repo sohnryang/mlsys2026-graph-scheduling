@@ -68,19 +68,16 @@ impl ConstraintTracker {
     }
 
     pub fn find(&mut self, mut axis: Axis) -> Axis {
-        let Some(&parent) = self.parents.get(&axis) else {
-            return axis;
-        };
-        match parent {
-            Axis::Full(_) => parent,
-            _ => {
-                while self.parents[&axis] != axis {
-                    let grandparent = self.parents[&self.parents[&axis]];
-                    self.parents.insert(axis, grandparent);
-                    axis = grandparent;
-                }
-                axis
+        loop {
+            let Some(&parent) = self.parents.get(&axis) else {
+                return axis;
+            };
+            if parent == axis || matches!(parent, Axis::Full(_)) {
+                return parent;
             }
+            let grandparent = self.parents.get(&parent).copied().unwrap_or(parent);
+            self.parents.insert(axis, grandparent);
+            axis = grandparent;
         }
     }
 
