@@ -308,10 +308,16 @@ pub fn search_tile_values(
     };
     let (max_m_value, max_n_value) = device_params.native_granularity;
     let max_k_value = output_dimensions
-        .values()
-        .map(|(_, _, k)| *k)
-        .max()
-        .unwrap();
+        .iter()
+        .filter_map(
+            |(&tensor_id, &(_, _, k))| match graph.producer_of(tensor_id).unwrap().kind {
+                OperationType::MatMul => Some(k),
+                OperationType::Pointwise => None,
+            },
+        )
+        .min()
+        .unwrap_or(1)
+        .min(max_m_value);
     let clipped_singleton_range = |x, limit| {
         if x <= limit {
             Ok(x..=x)
@@ -361,11 +367,17 @@ pub fn search_tile_values(
             };
             let k_start = *range_k.start();
             let k_end = *range_k.end();
+            if k_end > max_k_value {
+                continue;
+            }
             let output_footprint =
                 m * n * (subgraph_output_ids.len() - reserved_outputs_count) as i64;
             // Footprint is monotonically non-decreasing in k, so binary-search
             // for the largest k that fits in fast memory.
             let capacity = device_params.fast_memory_capacity - reserved_fast_memory;
+            if capacity <= 0 {
+                return Err(SearchError::NotFound);
+            }
             let mut lo = k_start;
             let mut hi = k_end + 1;
             while lo < hi {
