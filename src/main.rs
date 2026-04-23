@@ -25,7 +25,7 @@ use crate::input_format::{DeviceParameters, InputFormat};
 use crate::naive_scheduler::naive_schedule;
 use crate::output_format::OutputFormat;
 use crate::partition::search_partition;
-use crate::performance_model::subgraph_latency;
+use crate::performance_model::{subgraph_latency, total_latency};
 use crate::tiling::search_tile_values;
 
 #[derive(Parser)]
@@ -59,16 +59,20 @@ fn main() {
     let subgraph_costs = convex_subgraphs
         .into_par_iter()
         .filter_map(|subgraph| {
-            if search_tile_values(&subgraph, &input.device_parameters, &[]).is_err() {
-                return None;
-            }
-            let (partitions, total_cost) = search_partition(&subgraph, &input.device_parameters)?;
-            Some((subgraph, f64::try_from(total_cost).unwrap(), partitions))
+            let tile_size = search_tile_values(&subgraph, &input.device_parameters, &[]).ok()?;
+            let metrics = subgraph_latency(&input.device_parameters, &subgraph, tile_size, &[]);
+            let cost = f64::try_from(total_latency(&metrics)).unwrap();
+            let whole_partition = vec![Partition {
+                subgraph: subgraph.clone(),
+                retained_outputs: vec![],
+                tile_size,
+            }];
+            Some((subgraph, cost, whole_partition))
         })
         .collect::<Vec<_>>();
     if cli.verbose {
         eprintln!(
-            "subgraph performance cost model took: {:?}",
+            "whole-subgraph cost model took: {:?}",
             start.elapsed()
         );
         eprintln!("subgraph count: {}", subgraph_costs.len());
@@ -77,6 +81,19 @@ fn main() {
     let execution_plan = optimize_execution_plan(&graph, &subgraph_costs);
     if cli.verbose {
         eprintln!("subgraph selection took: {:?}", start.elapsed());
+    }
+
+    let start = Instant::now();
+    let execution_plan = execution_plan
+        .into_par_iter()
+        .map(|(subgraph, _)| {
+            let (partitions, _) = search_partition(&subgraph, &input.device_parameters)
+                .expect("selected subgraph failed to partition");
+            (subgraph, partitions)
+        })
+        .collect::<Vec<_>>();
+    if cli.verbose {
+        eprintln!("selected subgraph partitioning took: {:?}", start.elapsed());
     }
 
     let ordered_plan = topological_sort_subgraphs(execution_plan);
