@@ -22,9 +22,9 @@ pub mod tiling;
 use crate::global_optimization::{extract_convex_subgraphs, optimize_execution_plan};
 use crate::graph::{ComputationGraph, Partition, Subgraph, TensorId};
 use crate::input_format::{DeviceParameters, InputFormat};
-use crate::local_optimization::partition_subgraph;
 use crate::naive_scheduler::naive_schedule;
 use crate::output_format::OutputFormat;
+use crate::partition::search_partition;
 use crate::performance_model::subgraph_latency;
 use crate::tiling::search_tile_values;
 
@@ -62,13 +62,8 @@ fn main() {
             if search_tile_values(&subgraph, &input.device_parameters, &[]).is_err() {
                 return None;
             }
-            let partitions = partition_subgraph(&subgraph, &input.device_parameters)?;
-            let total_cost: Fraction = partitions.iter().map(|(_, cost)| cost).sum();
-            Some((
-                subgraph,
-                f64::try_from(total_cost).unwrap(),
-                partitions.into_iter().map(|(p, _)| p).collect(),
-            ))
+            let (partitions, total_cost) = search_partition(&subgraph, &input.device_parameters)?;
+            Some((subgraph, f64::try_from(total_cost).unwrap(), partitions))
         })
         .collect::<Vec<_>>();
     if cli.verbose {
