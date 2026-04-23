@@ -6,7 +6,7 @@ use crate::{
     graph::{OperationId, Partition, Subgraph, TensorId},
     input_format::DeviceParameters,
     performance_model::{subgraph_latency, total_latency},
-    tiling::{SearchError, search_tile_values},
+    tiling::search_tile_values,
 };
 
 fn try_extract_output_covering_subgraph<'a>(
