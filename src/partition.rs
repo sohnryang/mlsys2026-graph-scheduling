@@ -139,43 +139,60 @@ fn try_partition_subgraph<'a>(
     Some((partitions, total_cost))
 }
 
+const BEAM_SIZE: usize = 8;
+
 pub fn search_partition<'a>(
     subgraph: &Subgraph<'a>,
     device_params: &DeviceParameters,
 ) -> Option<(Vec<Partition<'a>>, Fraction)> {
     let graph = subgraph.parent();
     let subgraph_inputs = subgraph.input_tensor_ids();
-    let mut is_retained_edge = HashMap::new();
-    let mut best_cost = None;
 
+    let mut edges = vec![];
     for &operation_id in subgraph.nodes() {
         for &input_id in graph.input_ids_for(operation_id) {
             if subgraph_inputs.contains(&input_id) {
                 continue;
             }
-
-            let mut best_decision = false;
-            for should_retain in [true, false] {
-                is_retained_edge.insert((input_id, operation_id), should_retain);
-                let Some((_, partition_cost)) =
-                    try_partition_subgraph(subgraph, device_params, &is_retained_edge)
-                else {
-                    if should_retain {
-                        continue;
-                    } else {
-                        return None;
-                    }
-                };
-                if partition_cost < best_cost.unwrap_or(Fraction::infinity()) {
-                    best_cost = Some(partition_cost);
-                    best_decision = should_retain;
-                }
-            }
-            is_retained_edge.insert((input_id, operation_id), best_decision);
+            edges.push((input_id, operation_id));
         }
     }
 
-    try_partition_subgraph(subgraph, device_params, &is_retained_edge)
+    let mut beam: Vec<(HashMap<(TensorId, OperationId), bool>, Fraction)> =
+        vec![(HashMap::new(), Fraction::from(0u64))];
+
+    for (i, &edge) in edges.iter().enumerate() {
+        let mut candidates = vec![];
+        for (assignment, _) in &beam {
+            for should_retain in [true, false] {
+                let mut new_assignment = assignment.clone();
+                new_assignment.insert(edge, should_retain);
+                if let Some((_, cost)) =
+                    try_partition_subgraph(subgraph, device_params, &new_assignment)
+                {
+                    candidates.push((new_assignment, cost));
+                }
+            }
+        }
+
+        if candidates.is_empty() {
+            let mut assignment = HashMap::new();
+            for &past_edge in &edges[..=i] {
+                assignment.insert(past_edge, false);
+            }
+            let (_, cost) = try_partition_subgraph(subgraph, device_params, &assignment)?;
+            beam = vec![(assignment, cost)];
+        } else {
+            candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            candidates.truncate(BEAM_SIZE);
+            beam = candidates;
+        }
+    }
+
+    let (best_assignment, _) = beam
+        .into_iter()
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())?;
+    try_partition_subgraph(subgraph, device_params, &best_assignment)
 }
 
 #[cfg(test)]
