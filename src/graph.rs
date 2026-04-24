@@ -477,7 +477,7 @@ impl<'a> Subgraph<'a> {
                     .consumers()
                     .get(&tensor_id)
                     .map_or(true, |consumers| {
-                        consumers.iter().any(|c| !node_set.contains(c))
+                        consumers.iter().all(|c| !node_set.contains(c))
                     })
             })
             .collect()
@@ -1132,7 +1132,7 @@ mod tests {
     // t1 --/                     \
     //                             +--> [op2] --> t5
     //                       t3 --/
-    // output tensor ids of subgraph {op0, op1} : {t2, t4}
+    // output tensor ids of subgraph {op0, op1} : {t4}
     #[test]
     fn output_tensors_of_branching_subgraph() {
         let input = make_input(
@@ -1152,8 +1152,7 @@ mod tests {
         let sg = subgraph(&graph, [0, 1]);
 
         let output_tensors = sg.output_tensor_ids();
-        assert_eq!(output_tensors.len(), 2);
-        assert!(output_tensors.contains(&TensorId(2)));
+        assert_eq!(output_tensors.len(), 1);
         assert!(output_tensors.contains(&TensorId(4)));
     }
 }
