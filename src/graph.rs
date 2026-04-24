@@ -255,9 +255,7 @@ impl ComputationGraph {
     }
 
     pub fn consumer_ids_for(&self, tensor_id: TensorId) -> &[OperationId] {
-        self.consumers
-            .get(&tensor_id)
-            .expect(format!("{tensor_id:?} does not exist").as_str())
+        self.consumers.get(&tensor_id).map_or(&[], |v| v.as_slice())
     }
 
     pub fn consumers_for(&self, tensor_id: TensorId) -> Vec<Operation> {
