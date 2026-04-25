@@ -9,7 +9,7 @@ use fraction::Fraction;
 use crate::{
     graph::{OperationType, Subgraph, TensorId},
     input_format::DeviceParameters,
-    tiling::ceil_div,
+    tiling::{ResidencySet, SliceIndex, SliceName, SliceRole, SliceShape, ceil_div},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,57 +74,73 @@ impl AddAssign for PerformanceMetric {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct TensorSlice {
-    position: (i64, i64),
-    shape: (i64, i64),
-}
-
-impl TensorSlice {
-    fn size(&self) -> i64 {
-        self.shape.0 * self.shape.1
-    }
-}
-
-fn input_tiles_for_output(
+/// Walks back from `output_id` and returns the list of slice names that must
+/// be resident for one iteration `(m_idx, n_idx, k_idx)` at granule
+/// `tile_size`.
+///
+/// The walk crosses fused matmul/pointwise ops:
+/// - Through a matmul whose output is the iteration's terminus: split-k along
+///   that op's reduction is honored (`reduction_size = tile_k`).
+/// - Through an inner matmul: full reduction (its own k-axis is not split).
+/// - Through a pointwise: shape is preserved.
+///
+/// The returned slice names use:
+/// - `LhsRowStrip` / `RhsColStrip` for matmul boundary inputs;
+/// - `PointwiseTile` for pointwise boundary inputs (also used as the
+///   default for the walked-from output's slice if it's a boundary input
+///   directly — this can't happen in practice but we have to pick a role).
+fn slice_names_for_output(
     subgraph: &Subgraph<'_>,
     output_id: TensorId,
     tile_size: (i64, i64, i64),
     tile_index: (i64, i64, i64),
-) -> HashMap<TensorId, Vec<TensorSlice>> {
+) -> Vec<SliceName> {
     let input_tensor_ids = subgraph.input_tensor_ids();
     let graph = subgraph.parent();
     let output_tensor = &graph.tensors()[output_id.0];
-    let output_tile_position = (tile_index.0 * tile_size.0, tile_index.1 * tile_size.1);
-    let output_tile_shape = (
-        i64::min(tile_size.0, output_tensor.height - output_tile_position.0),
-        i64::min(tile_size.1, output_tensor.width - output_tile_position.1),
-    );
-    let mut stack = vec![(
-        output_id,
-        TensorSlice {
-            position: output_tile_position,
-            shape: output_tile_shape,
-        },
-    )];
+    let (tile_h, tile_w, tile_k) = tile_size;
+    let (m_idx, n_idx, k_idx) = tile_index;
 
-    let mut input_tiles = HashMap::new();
-    while let Some((tensor_id, tensor_slice)) = stack.pop() {
+    let output_position = (m_idx * tile_h, n_idx * tile_w);
+    let output_shape = (
+        i64::min(tile_h, output_tensor.height - output_position.0),
+        i64::min(tile_w, output_tensor.width - output_position.1),
+    );
+
+    // Walk-stack entries: (tensor, position, shape, role).
+    let mut stack: Vec<(TensorId, (i64, i64), (i64, i64), SliceRole)> = vec![(
+        output_id,
+        output_position,
+        output_shape,
+        SliceRole::PointwiseTile,
+    )];
+    let mut result: Vec<SliceName> = Vec::new();
+
+    while let Some((tensor_id, position, shape, role)) = stack.pop() {
         if input_tensor_ids.contains(&tensor_id) {
-            input_tiles
-                .entry(tensor_id)
-                .or_insert(vec![])
-                .push(tensor_slice);
+            result.push(SliceName::Partial {
+                tensor: tensor_id,
+                role,
+                index: SliceIndex {
+                    spatial_row: position.0,
+                    spatial_col: position.1,
+                    k_step: 0,
+                },
+                shape: SliceShape {
+                    rows: shape.0,
+                    cols: shape.1,
+                },
+            });
             continue;
         }
 
         let producer_id = graph.producer_id_of(tensor_id).unwrap();
-        let producer_op = &graph.producer_of(tensor_id).unwrap();
+        let producer_op = graph.producer_of(tensor_id).unwrap();
         let input_ids = graph.input_ids_for(producer_id);
         match producer_op.kind {
             OperationType::Pointwise => {
                 for &input_id in input_ids {
-                    stack.push((input_id, tensor_slice));
+                    stack.push((input_id, position, shape, SliceRole::PointwiseTile));
                 }
             }
             OperationType::MatMul => {
@@ -133,33 +149,31 @@ fn input_tiles_for_output(
                 let input1_id = input_ids[1];
 
                 let reduction_index = if tensor_id == output_id {
-                    tile_index.2 * tile_size.2
+                    k_idx * tile_k
                 } else {
                     0
                 };
                 let reduction_size = if tensor_id == output_id {
-                    i64::min(tile_size.2, input0.width - reduction_index)
+                    i64::min(tile_k, input0.width - reduction_index)
                 } else {
                     input0.width
                 };
                 stack.push((
                     input0_id,
-                    TensorSlice {
-                        position: (tensor_slice.position.0, reduction_index),
-                        shape: (tensor_slice.shape.0, reduction_size),
-                    },
+                    (position.0, reduction_index),
+                    (shape.0, reduction_size),
+                    SliceRole::LhsRowStrip,
                 ));
                 stack.push((
                     input1_id,
-                    TensorSlice {
-                        position: (reduction_index, tensor_slice.position.1),
-                        shape: (reduction_size, tensor_slice.shape.1),
-                    },
+                    (reduction_index, position.1),
+                    (reduction_size, shape.1),
+                    SliceRole::RhsColStrip,
                 ));
             }
-        };
+        }
     }
-    input_tiles
+    result
 }
 
 pub fn subgraph_latency(
@@ -168,18 +182,22 @@ pub fn subgraph_latency(
     tile_size: (i64, i64, i64),
     retained_tensor_ids: &[TensorId],
 ) -> HashMap<TensorId, Vec<PerformanceMetric>> {
-    let retained_tensor_ids = retained_tensor_ids.iter().copied().collect::<HashSet<_>>();
+    let retained_tensor_ids: HashSet<TensorId> = retained_tensor_ids.iter().copied().collect();
     let input_tensor_ids = subgraph.input_tensor_ids();
-    let output_tensor_ids = {
-        let mut v = subgraph.output_tensor_ids().into_iter().collect::<Vec<_>>();
+    let output_tensor_ids: Vec<TensorId> = {
+        let mut v: Vec<TensorId> = subgraph.output_tensor_ids().into_iter().collect();
         v.sort();
         v
     };
 
     let graph = subgraph.parent();
-    let (tile_w, tile_h, tile_k) = tile_size;
+    let (tile_h, tile_w, tile_k) = tile_size;
+
     let tile_counts = {
-        let output_id = output_tensor_ids.iter().next().unwrap();
+        let output_id = output_tensor_ids
+            .iter()
+            .next()
+            .expect("subgraph must have at least one output");
         let output = &graph.tensors()[output_id.0];
         (
             ceil_div(output.height, tile_h),
@@ -187,28 +205,32 @@ pub fn subgraph_latency(
         )
     };
 
-    let input_memory_cost =
-        |input_tiles: &HashMap<TensorId, Vec<TensorSlice>>,
-         cached_inputs: &HashSet<(TensorId, TensorSlice)>| {
-            let input_traffic: i64 = input_tiles
-                .iter()
-                .map(|(&tensor_id, tensor_slices)| -> i64 {
-                    tensor_slices
-                        .iter()
-                        .filter_map(|&tensor_slice| {
-                            if retained_tensor_ids.contains(&tensor_id)
-                                || cached_inputs.contains(&(tensor_id, tensor_slice))
-                            {
-                                None
-                            } else {
-                                Some(tensor_slice.size())
-                            }
-                        })
-                        .sum()
-                })
-                .sum();
-            Fraction::from(input_traffic) / device_params.slow_memory_bandwidth
-        };
+    let bandwidth = device_params.slow_memory_bandwidth;
+
+    // Adjacent-only implicit reuse (PROBLEM #59 / #65 / #70): a slice loaded
+    // at iteration i is available at i+1 iff the same name is in
+    // `cached_inputs`. Asymmetric matching: a `Whole(T)` resident covers any
+    // partial access to T — currently we never promote to Whole, but the
+    // matcher honors the rule for future use.
+    let input_memory_cost = |names: &[SliceName], cached: &ResidencySet| -> Fraction {
+        let bytes: i64 = names
+            .iter()
+            .map(|name| {
+                let tid = name.tensor_id();
+                if retained_tensor_ids.contains(&tid) || cached.matches(name) {
+                    0
+                } else {
+                    let whole_size = graph.tensors()[tid.0].size();
+                    name.elements(whole_size)
+                }
+            })
+            .sum();
+        Fraction::from(bytes) / bandwidth
+    };
+
+    // Total per-spatial-tile compute charge for ops feeding `output_id`.
+    // For chained subgraphs, this sums every contributing op's `base_cost`
+    // (each op fires once per spatial tile of the eventual output).
     let compute_latency = |output_id| {
         let mut latency = PerformanceMetric::zero();
         let mut stack = vec![output_id];
@@ -226,20 +248,21 @@ pub fn subgraph_latency(
         }
         latency
     };
-    let output_memory_cost = |output_id, tile_index: (i64, i64)| {
+
+    let output_memory_cost = |output_id: TensorId, tile_index: (i64, i64)| -> Fraction {
         if retained_tensor_ids.contains(&output_id) {
             Fraction::from(0i64)
         } else {
-            let output_tile_position = (tile_index.0 * tile_h, tile_index.1 * tile_w);
+            let position = (tile_index.0 * tile_h, tile_index.1 * tile_w);
             let tensor = &graph.tensors()[output_id.0];
-            let output_tile_size = i64::min(tile_h, tensor.height - output_tile_position.0)
-                * i64::min(tile_w, tensor.width - output_tile_position.1);
-            Fraction::from(output_tile_size) / device_params.slow_memory_bandwidth
+            let evict_bytes = i64::min(tile_h, tensor.height - position.0)
+                * i64::min(tile_w, tensor.width - position.1);
+            Fraction::from(evict_bytes) / bandwidth
         }
     };
 
-    let mut cached_inputs = HashSet::new();
-    let mut latencies = HashMap::new();
+    let mut cached_inputs = ResidencySet::new();
+    let mut latencies: HashMap<TensorId, Vec<PerformanceMetric>> = HashMap::new();
     for &output_id in output_tensor_ids.iter() {
         let output_producer = &graph.producer_of(output_id).unwrap();
         let output_producer_id = graph.producer_id_of(output_id).unwrap();
@@ -250,33 +273,27 @@ pub fn subgraph_latency(
             OperationType::Pointwise => 1,
         };
         let reduction_counts = ceil_div(reduction_size, tile_k);
-        let mut output_latencies = vec![];
-        let compute_cost_per_spatial_tile = compute_latency(output_id).compute_cost;
+        let mut output_latencies: Vec<PerformanceMetric> = vec![];
+        let compute_total = compute_latency(output_id).compute_cost;
+
         for m_tile_idx in 0..tile_counts.0 {
             for n_tile_idx in 0..tile_counts.1 {
                 for k_tile_idx in 0..reduction_counts {
-                    let input_tiles = input_tiles_for_output(
+                    let names = slice_names_for_output(
                         subgraph,
                         output_id,
-                        (tile_h, tile_w, tile_k),
+                        tile_size,
                         (m_tile_idx, n_tile_idx, k_tile_idx),
                     );
                     let reduction_tile_size =
                         i64::min(tile_k, reduction_size - k_tile_idx * tile_k);
                     let latency = PerformanceMetric::from_memory_cost(input_memory_cost(
-                        &input_tiles,
+                        &names,
                         &cached_inputs,
                     )) + PerformanceMetric::from_compute_cost(
-                        compute_cost_per_spatial_tile / reduction_size * reduction_tile_size,
+                        compute_total / reduction_size * reduction_tile_size,
                     );
-                    cached_inputs = input_tiles
-                        .into_iter()
-                        .flat_map(|(tensor_id, tensor_slices)| {
-                            tensor_slices
-                                .into_iter()
-                                .map(move |tensor_slice| (tensor_id, tensor_slice))
-                        })
-                        .collect();
+                    cached_inputs.replace(names.iter().copied());
                     output_latencies.push(latency);
                 }
                 *output_latencies.last_mut().unwrap() += PerformanceMetric::from_memory_cost(
