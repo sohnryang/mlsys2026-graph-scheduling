@@ -177,12 +177,13 @@ pub fn subgraph_latency(
     };
 
     let graph = subgraph.parent();
+    let (tile_w, tile_h, tile_k) = tile_size;
     let tile_counts = {
         let output_id = output_tensor_ids.iter().next().unwrap();
         let output = &graph.tensors()[output_id.0];
         (
-            ceil_div(output.height, tile_size.0),
-            ceil_div(output.width, tile_size.1),
+            ceil_div(output.height, tile_h),
+            ceil_div(output.width, tile_w),
         )
     };
 
@@ -229,10 +230,10 @@ pub fn subgraph_latency(
         if retained_tensor_ids.contains(&output_id) {
             Fraction::from(0i64)
         } else {
-            let output_tile_position = (tile_index.0 * tile_size.0, tile_index.1 * tile_size.1);
+            let output_tile_position = (tile_index.0 * tile_h, tile_index.1 * tile_w);
             let tensor = &graph.tensors()[output_id.0];
-            let output_tile_size = i64::min(tile_size.0, tensor.height - output_tile_position.0)
-                * i64::min(tile_size.1, tensor.width - output_tile_position.1);
+            let output_tile_size = i64::min(tile_h, tensor.height - output_tile_position.0)
+                * i64::min(tile_w, tensor.width - output_tile_position.1);
             Fraction::from(output_tile_size) / device_params.slow_memory_bandwidth
         }
     };
@@ -248,7 +249,7 @@ pub fn subgraph_latency(
             }
             OperationType::Pointwise => 1,
         };
-        let reduction_counts = ceil_div(reduction_size, tile_size.2);
+        let reduction_counts = ceil_div(reduction_size, tile_k);
         let mut output_latencies = vec![];
         let compute_cost_per_spatial_tile = compute_latency(output_id).compute_cost;
         for m_tile_idx in 0..tile_counts.0 {
@@ -257,11 +258,11 @@ pub fn subgraph_latency(
                     let input_tiles = input_tiles_for_output(
                         subgraph,
                         output_id,
-                        tile_size,
+                        (tile_h, tile_w, tile_k),
                         (m_tile_idx, n_tile_idx, k_tile_idx),
                     );
                     let reduction_tile_size =
-                        i64::min(tile_size.2, reduction_size - k_tile_idx * tile_size.2);
+                        i64::min(tile_k, reduction_size - k_tile_idx * tile_k);
                     let latency = PerformanceMetric::from_memory_cost(input_memory_cost(
                         &input_tiles,
                         &cached_inputs,

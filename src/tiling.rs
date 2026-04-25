@@ -303,7 +303,7 @@ pub fn search_tile_values(
                 })
         })
     };
-    let (max_m_value, max_n_value) = device_params.native_granularity;
+    let (max_n_value, max_m_value) = device_params.native_granularity;
     let max_k_value = output_dimensions
         .iter()
         .filter_map(
@@ -390,7 +390,7 @@ pub fn search_tile_values(
                 let traffic = input_traffic(m, n, k);
                 if min_traffic >= traffic {
                     min_traffic = traffic;
-                    best_values = Some((m, n, k));
+                    best_values = Some((n, m, k));
                 }
             }
         }
@@ -1051,8 +1051,8 @@ mod tests {
         let graph = ComputationGraph::new(&input);
         let subgraph = subgraph(&graph, [0, 1]);
 
-        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters, &[]).unwrap();
-        assert_eq!((m, n, k), (128, 128, 1));
+        let tile_size = search_tile_values(&subgraph, &input.device_parameters, &[]).unwrap();
+        assert_eq!(tile_size, (128, 128, 1));
     }
 
     // Example 2 from the official repo (PROBLEM.md):
@@ -1067,8 +1067,8 @@ mod tests {
         let graph = ComputationGraph::new(&input);
         let subgraph = subgraph(&graph, [0, 1]);
 
-        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters, &[]).unwrap();
-        assert_eq!((m, n, k), (128, 128, 1));
+        let tile_size = search_tile_values(&subgraph, &input.device_parameters, &[]).unwrap();
+        assert_eq!(tile_size, (128, 128, 1));
     }
 
     // Example 5 from the official repo (PROBLEM.md): Chained MatMul (Split-K)
@@ -1086,8 +1086,8 @@ mod tests {
         let graph = ComputationGraph::new(&input);
         let subgraph = subgraph(&graph, [0, 1]);
 
-        let (m, n, k) = search_tile_values(&subgraph, &input.device_parameters, &[]).unwrap();
-        assert_eq!((m, n, k), (128, 128, 43));
+        let tile_size = search_tile_values(&subgraph, &input.device_parameters, &[]).unwrap();
+        assert_eq!(tile_size, (128, 128, 43));
     }
 
     // Variant of example 5 with 256x256 tensors.
@@ -1112,7 +1112,7 @@ mod tests {
         });
         let subgraph = subgraph(&graph, [0, 1]);
 
-        let (m, n, k) = search_tile_values(&subgraph, &device_params, &[]).unwrap();
-        assert_eq!((m, n, k), (64, 128, 52));
+        let tile_size = search_tile_values(&subgraph, &device_params, &[]).unwrap();
+        assert_eq!(tile_size, (128, 64, 52));
     }
 }
