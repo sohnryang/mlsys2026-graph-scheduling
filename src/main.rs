@@ -11,7 +11,6 @@ use rayon::prelude::*;
 pub mod global_optimization;
 pub mod graph;
 pub mod input_format;
-pub mod local_optimization;
 pub mod naive_scheduler;
 pub mod output_format;
 pub mod partition;
@@ -128,8 +127,11 @@ fn write_output(
             tile_size: tile,
         } in partitions
         {
-            let combined: Vec<TensorId> =
-                prev_retained.iter().chain(retained.iter()).copied().collect();
+            let combined: Vec<TensorId> = prev_retained
+                .iter()
+                .chain(retained.iter())
+                .copied()
+                .collect();
             let metrics = subgraph_latency(device_params, &sg, tile, &combined);
             let latency: Fraction = metrics
                 .values()
