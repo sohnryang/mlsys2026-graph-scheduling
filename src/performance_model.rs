@@ -277,7 +277,12 @@ pub fn subgraph_latency(
         let compute_total = compute_latency(output_id).compute_cost;
 
         for m_tile_idx in 0..tile_counts.0 {
-            for n_tile_idx in 0..tile_counts.1 {
+            for n_step in 0..tile_counts.1 {
+                let n_tile_idx = if m_tile_idx % 2 == 0 {
+                    n_step
+                } else {
+                    tile_counts.1 - 1 - n_step
+                };
                 for k_tile_idx in 0..reduction_counts {
                     let names = slice_names_for_output(
                         subgraph,
@@ -470,9 +475,10 @@ mod tests {
     }
 
     // Official Example 4, Strategy A: single MatMul tiled at (64,64,128) in
-    // raster order. Expected total: 7096.
+    // snake order. Snake reuses one extra LHS row strip at each m-row turn
+    // versus raster's 7096.
     #[test]
-    fn example4_strategy_a_raster() {
+    fn example4_strategy_a_snake() {
         let input = load_input("official_example4.json");
         let device = input.device_parameters.clone();
         let graph: ComputationGraph = input.into();
@@ -481,7 +487,7 @@ mod tests {
         let latencies = subgraph_latency(&device, &sg, (64, 64, 128), &[]);
 
         assert_eq!(latencies.len(), 1);
-        assert_eq!(total_latency(&latencies), Fraction::new(70960u64, 10u64));
+        assert_eq!(total_latency(&latencies), "6548".parse().unwrap());
     }
 
     // Official Example 5, Strategy B: chained MatMuls merged into one

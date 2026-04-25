@@ -26,7 +26,7 @@ use crate::naive_scheduler::naive_schedule;
 use crate::output_format::OutputFormat;
 use crate::partition::search_partition;
 use crate::performance_model::{subgraph_latency, total_latency};
-use crate::tiling::search_tile_values;
+use crate::tiling::{ceil_div, search_tile_values};
 
 #[derive(Parser)]
 struct Cli {
@@ -132,10 +132,11 @@ fn write_output(
                 .values()
                 .flat_map(|v| v.iter().map(|m| m.latency()))
                 .sum();
+            let traversal = snake_traversal(&sg, tile);
             subgraphs.push(sg.nodes().to_vec());
             granularities.push(tile);
             tensors_to_retain.push(retained);
-            traversal_orders.push(None);
+            traversal_orders.push(traversal);
             subgraph_latencies.push(f64::try_from(latency).unwrap());
         }
     }
@@ -151,6 +152,35 @@ fn write_output(
     let file = File::create(path).expect("failed to create output file");
     serde_json::to_writer(BufWriter::new(file), &output).expect("failed to write output");
     total
+}
+
+/// Spatial tile order matching `subgraph_latency`'s iteration: snake over the
+/// smallest output's `(m_tiles × n_tiles)` grid. Indices are row-major:
+/// `m * n_tiles + n`. Returns `None` when the grid has fewer than two rows
+/// or columns — snake collapses to raster there, and the output schema
+/// expects `null` for the default order.
+fn snake_traversal(subgraph: &Subgraph<'_>, tile_size: (i64, i64, i64)) -> Option<Vec<i64>> {
+    let graph = subgraph.parent();
+    let output_id = subgraph
+        .output_tensor_ids()
+        .into_iter()
+        .min()
+        .expect("subgraph must have at least one output");
+    let output = &graph.tensors()[output_id.0];
+    let (tile_h, tile_w, _) = tile_size;
+    let rows = ceil_div(output.height, tile_h);
+    let cols = ceil_div(output.width, tile_w);
+    if rows < 2 || cols < 2 {
+        return None;
+    }
+    let mut order = Vec::with_capacity((rows * cols) as usize);
+    for m in 0..rows {
+        for step in 0..cols {
+            let n = if m % 2 == 0 { step } else { cols - 1 - step };
+            order.push(m * cols + n);
+        }
+    }
+    Some(order)
 }
 
 /// Orders selected subgraphs so that if subgraph `B` produces a tensor that
