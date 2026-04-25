@@ -303,6 +303,34 @@ pub fn search_tile_values(
                 })
         })
     };
+    // Collect (side, reduction_dim) for each matmul whose LHS/RHS is produced
+    // by a pointwise op inside the subgraph. Side `false` => LHS, `true` => RHS.
+    let mut pw_feeding_matmul: Vec<(bool, i64)> = Vec::new();
+    for &op_id in subgraph.nodes() {
+        let op_output = graph.output_ids_for(op_id)[0];
+        if !matches!(graph.producer_of(op_output).unwrap().kind, OperationType::MatMul) {
+            continue;
+        }
+        let inputs = graph.input_ids_for(op_id);
+        let lhs_id = inputs[0];
+        let rhs_id = inputs[1];
+        let reduction_dim = graph.tensors()[lhs_id.0].width;
+        if let Some(producer_id) = graph.producer_id_of(lhs_id) {
+            if subgraph.contains(producer_id)
+                && matches!(graph.producer_of(lhs_id).unwrap().kind, OperationType::Pointwise)
+            {
+                pw_feeding_matmul.push((false, reduction_dim));
+            }
+        }
+        if let Some(producer_id) = graph.producer_id_of(rhs_id) {
+            if subgraph.contains(producer_id)
+                && matches!(graph.producer_of(rhs_id).unwrap().kind, OperationType::Pointwise)
+            {
+                pw_feeding_matmul.push((true, reduction_dim));
+            }
+        }
+    }
+
     let (max_n_value, max_m_value) = device_params.native_granularity;
     let max_k_value = output_dimensions
         .iter()
@@ -387,6 +415,19 @@ pub fn search_tile_values(
             }
             // lo == hi == first k that doesn't fit, so iterate k_start..lo.
             for k in k_start..lo {
+                // Apply pointwise→matmul tile constraints only when split-k is
+                // actually used for that matmul (k < its reduction dimension).
+                let violates = pw_feeding_matmul.iter().any(|&(is_rhs, reduction_dim)| {
+                    k < reduction_dim
+                        && if is_rhs {
+                            m < reduction_dim
+                        } else {
+                            n < reduction_dim
+                        }
+                });
+                if violates {
+                    continue;
+                }
                 let traffic = input_traffic(m, n, k);
                 if min_traffic >= traffic {
                     min_traffic = traffic;
