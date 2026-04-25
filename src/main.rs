@@ -71,10 +71,7 @@ fn main() {
         })
         .collect::<Vec<_>>();
     if cli.verbose {
-        eprintln!(
-            "whole-subgraph cost model took: {:?}",
-            start.elapsed()
-        );
+        eprintln!("whole-subgraph cost model took: {:?}", start.elapsed());
         eprintln!("subgraph count: {}", subgraph_costs.len());
     }
     let start = Instant::now();

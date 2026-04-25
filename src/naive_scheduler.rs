@@ -7,7 +7,6 @@ use crate::{
     tiling::search_tile_values,
 };
 
-
 /// Schedules each operation independently in topological order using the
 /// largest feasible tile per single-op subgraph and no inter-op retention.
 ///
