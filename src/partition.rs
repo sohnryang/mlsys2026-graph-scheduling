@@ -139,7 +139,7 @@ fn try_partition_subgraph<'a>(
     Some((partitions, total_cost))
 }
 
-const BEAM_SIZE: usize = 8;
+const BEAM_SIZE: usize = 10;
 
 pub fn search_partition<'a>(
     subgraph: &Subgraph<'a>,
