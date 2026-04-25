@@ -121,13 +121,16 @@ fn write_output(
     let mut subgraph_latencies = Vec::new();
 
     for partitions in ordered_plan {
+        let mut prev_retained: Vec<TensorId> = Vec::new();
         for Partition {
             subgraph: sg,
             retained_outputs: retained,
             tile_size: tile,
         } in partitions
         {
-            let metrics = subgraph_latency(device_params, &sg, tile, &retained);
+            let combined: Vec<TensorId> =
+                prev_retained.iter().chain(retained.iter()).copied().collect();
+            let metrics = subgraph_latency(device_params, &sg, tile, &combined);
             let latency: Fraction = metrics
                 .values()
                 .flat_map(|v| v.iter().map(|m| m.latency()))
@@ -135,6 +138,7 @@ fn write_output(
             let traversal = snake_traversal(&sg, tile);
             subgraphs.push(sg.nodes().to_vec());
             granularities.push(tile);
+            prev_retained = retained.clone();
             tensors_to_retain.push(retained);
             traversal_orders.push(traversal);
             subgraph_latencies.push(f64::try_from(latency).unwrap());
