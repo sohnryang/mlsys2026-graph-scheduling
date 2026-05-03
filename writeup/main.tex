@@ -21,7 +21,7 @@
     urlcolor=blue!50!black,
 }
 
-\title{Writeup for the Submission of MLSys 2026 Competition}
+\title{Writeup for MLSys 2026 Graph Scheduling Competition}
 \author{Ryang Sohn}
 \date{\today}
 
@@ -35,8 +35,8 @@ computation graph optimizer.
 
 The overall approach was inspired by two prior works: Korch\cite{korch2024}
 and Welder\cite{welder2023}. From Korch, we have adopted a kernel selection
-strategy using BLP (Binary Linear Programming) to allow selecting schedules with
-recomputations of some operations. Also, we have implemented a selection
+strategy using BLP (Binary Linear Programming) to allow selecting schedules
+that recompute some operations. Also, we have implemented a selection
 algorithm to determine retained tensors based on the \texttt{GraphConnecting}
 algorithm introduced in Welder.
 
@@ -58,19 +58,22 @@ Rather than the pairwise-difference enumeration described by Korch, we use a see
 
 \subsection{Benchmarking Convex Subgraphs}
 
-For each enumerated subgraph, the optimizer searches \texttt{(w, h, k)} tile sizes in parallel and picks the one minimizing input and output memory traffic, preferring larger tiles to break ties. Candidate spatial tiles are divisors of each output's width (resp. height) up to native granularity, intersected across all outputs. Candidate reduction tiles are divisors of the smallest matmul $K$ that also divide every other matmul's $K$, capped by the native granularity. Feasibility is checked by projecting per-op iteration dimensions $(m_O, n_O, k^{split}_O)$ backward through the subgraph in reverse topological order --- a boundary-producing op takes the global granule, an interior op feeding a pointwise consumer inherits its dimensions, and an interior op feeding a matmul consumer contracts to that consumer's LHS row strip or RHS column strip --- and summing LHS strips, RHS strips, pointwise tiles, and output accumulators into a conservative peak working set that must fit in fast memory minus retained-tensor reservation. Split-$k$ triples are also rejected when a fused pointwise prologue's tile would not cover the consumer matmul's full reduction.
+For each enumerated subgraph, the optimizer searches \texttt{(w, h, k)} tile sizes in parallel and picks the one minimizing input and output memory traffic, preferring larger tiles to break ties.
 
 After choosing tile size, the performance model determines the cost of the subgraph using the rules defined in the problem statement, also in parallel.
 
 \subsection{Subgraph Selection}
 
-The benchmarked subgraphs are then fed into the kernel selector. The kernel selector uses BLP to determine a set of optimal kernels to execute. Constraints are added to the BLP problem instance to ensure that all output tensors are computed and dependencies are not violated.
+The benchmarked subgraphs are then fed into the kernel selector. The kernel selector uses the BLP formulation introduced in Korch\cite{korch2024} to determine a set of optimal kernels to execute. Constraints are added to the BLP problem instance to ensure that all output tensors are computed and dependencies are not violated.
 
-In this implementation, we used the \texttt{good\_lp} crate to interface with the HiGHS LP solver, which is suitable because it allows linking statically to the binary.
+In this implementation, we used the \texttt{good\_lp} crate to interface with the HiGHS LP solver, which is suitable because it is fast and allows static linking into the binary. To ensure that the solver finishes under time constraints, we capped the BLP solver's running time to 10 seconds.
 
 \subsection{Retention and Traversal}
 
-The selected kernels are then optimized further by retaining some of the tensors in fast memory. When a tensor is retained in fast memory, the producer and the consumers of the tensor must be in different subgraphs. We implemented a memory-level selection algorithm inspired by Welder's \texttt{GraphConnecting} algorithm. In this implementation, fast memory is treated as ``higher level'' than ephemeral memory, and we added beam search to consider more candidates than a greedy algorithm.
+The selected kernels are then optimized further by retaining some of the tensors in fast memory.
+In this problem, the retained tensors of a subgraph can only be consumed by the next executed subgraph. By leveraging this, we can view the problem of choosing which tensors to retain as a problem of how to partition a subgraph into multiple subgraphs, where each partitioned subgraph's outputs are retained in the current subgraph and consumed by the next subgraph. We implemented a memory-level selection algorithm inspired by Welder's \texttt{GraphConnecting} algorithm\cite{welder2023}. In this implementation, fast memory is treated as ``higher level'' than ephemeral memory, and we added beam search to consider more candidates than a greedy algorithm.
+
+For traversal order, our solver always uses the ``snake'' traversal order to maximize implicit data reuse. In the setting of this competition, this is optimal because implicit data reuse is only possible across adjacent steps of subgraph execution.
 
 \section{Results}
 
@@ -92,10 +95,6 @@ Benchmark & Ops & Naive latency & Optimized latency & Speedup \\
 \end{table}
 
 The optimizer never regresses against the baseline. The largest gain is on \texttt{mlsys-5}, whose graph has enough fusible pointwise neighborhoods to amortize matmul output writes; on \texttt{mlsys-1}, all five operations are already memory-bound at their native tile, so no fusion improves on the per-op schedule.
-
-\section{Discussion}
-
-This challenge was a great opportunity to explore deep learning system optimization, specifically kernel fusion and graph compilers. Given more time, we would have explored non-convex kernel mapping as presented in FlashTensor.
 
 \bibliographystyle{plain}
 \bibliography{references}
