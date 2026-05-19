@@ -1,0 +1,20 @@
+\section{Overview}
+\begin{frame}
+\frametitle{Overview}
+
+\begin{itemize}
+  \item The solver needs to determine:
+  \begin{enumerate}
+    \item Operators to fuse
+    \item Retention of output tensors
+    \item Iteration order (snake ordering is optimal)
+    \item Tile size
+  \end{enumerate}
+  \pause
+  \item Retained tensor's lifetime is limited and fusion constraints are relaxed
+\end{itemize}
+\pause
+\begin{tcolorbox}[title={Our overall strategy}]
+  Retention is local, fusion is global; fuse the nodes first, then consider retention.
+\end{tcolorbox}
+\end{frame}

@@ -1,0 +1,31 @@
+\section{Motivation}
+\begin{frame}
+\frametitle{Motivation}
+\framesubtitle{Overall strategy}
+
+\begin{enumerate}
+  \item First thought: ``operator fusion is a well researched problem''
+  \pause
+  \begin{itemize}
+    \item How does production-grade optimizers approach this? (XLA, TensorRT, TVM, etc.)
+    \item They usually employ rule-based methods (e.g., epilogue-fuse ReLU after Matmul)
+  \end{itemize}
+  \pause
+  \item Rule-based methods work well in practice
+  \begin{itemize}
+    \item Operator's performance characteristics are often associated by its kind
+    \item e.g., ReLU is memory bound and (non-skinny) Matmul is compute bound
+  \end{itemize}
+  \pause
+  \item However, in this challenge...
+  \begin{itemize}
+    \item There are only two kinds of operator (Matmul and Pointwise)
+    \item Each operator can have arbitrary cost using \texttt{base\_cost}
+    \item Fusion opportunities are unlimited\pause *
+  \end{itemize}
+\end{enumerate}
+\pause
+\begin{tcolorbox}
+  Search-based method is needed for this challenge
+\end{tcolorbox}
+\end{frame}

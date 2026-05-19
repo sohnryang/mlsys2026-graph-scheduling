@@ -1,0 +1,25 @@
+\section{Fusion Strategy}
+\begin{frame}
+\frametitle{Fusion Strategy}
+
+\begin{itemize}
+  \item Recomputation of operators means larger search space
+  \begin{itemize}
+	\item How do we tackle the huge search space?
+  \end{itemize}
+  \pause
+  \item Hu et. al., Optimal Kernel Orchestration for Tensor Programs with Korch. (ASPLOS '24)
+  \begin{enumerate}
+    \item Enumerate convex subgraphs of the given graph
+    \item Benchmark the subgraphs to get latency
+    \item Formulate subgraph selection as BLP(Binary Linear Programming)
+    \item Solve the BLP to get optimal fusion strategy
+  \end{enumerate}
+  \pause
+  \item In practice, we had to compromise
+  \begin{itemize}
+    \item Cap the maximum size for enumerated convex subgraphs
+	\item Limit the BLP solver's running time
+  \end{itemize}
+\end{itemize}
+\end{frame}
