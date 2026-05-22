@@ -8,7 +8,7 @@
   \item In other words, selecting retained tensors means partitioning a subgraph
   \item How to partition efficiently?
   \pause
-  \item Shi et. al., Welder: Scheduling Deep Learning Memory Access via Tile-graph. (OSDI '23)
+  \item Shi et al., Welder: Scheduling Deep Learning Memory Access via Tile-graph. (OSDI '23)
   \begin{itemize}
     \item Introduces \texttt{GraphConnecting} algorithm for assigning memory tiers for tensors
   \end{itemize}
@@ -16,7 +16,7 @@
   \item Our partitioner selects ephemeral or fast memory for tensors
   \begin{itemize}
     \item Iterate over each internal tensor and determine whether the tensor should be retained
-    \item Based on \texttt{GraphConnecting}, exteded it to use beam search for better result
+    \item Based on \texttt{GraphConnecting}, we extended it to use beam search for better results
   \end{itemize}
 \end{itemize}
 \end{frame}

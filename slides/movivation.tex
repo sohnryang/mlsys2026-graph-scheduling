@@ -7,13 +7,13 @@
   \item First thought: ``operator fusion is a well researched problem''
   \pause
   \begin{itemize}
-    \item How does production-grade optimizers approach this? (XLA, TensorRT, TVM, etc.)
+    \item How do production-grade optimizers approach this? (XLA, TensorRT, TVM, etc.)
     \item They usually employ rule-based methods (e.g., epilogue-fuse ReLU after Matmul)
   \end{itemize}
   \pause
   \item Rule-based methods work well in practice
   \begin{itemize}
-    \item Operator's performance characteristics are often associated by its kind
+    \item An operator's performance characteristics are often associated with its kind
     \item e.g., ReLU is memory bound and (non-skinny) Matmul is compute bound
   \end{itemize}
   \pause
